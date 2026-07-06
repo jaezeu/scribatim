@@ -15,7 +15,9 @@ import numpy as np
 log = logging.getLogger("susurro.audio")
 
 TARGET_RATE = 16000
-TAP_BINARY = Path(__file__).resolve().parent.parent / "bin" / "susurro-tap"
+BIN_DIR = Path(__file__).resolve().parent.parent / "bin"
+TAP_BINARY = BIN_DIR / "susurro-tap"
+MIC_BINARY = BIN_DIR / "susurro-mic"
 
 
 def to_16k(samples: np.ndarray, rate: int) -> np.ndarray:
@@ -112,8 +114,15 @@ class Segmenter:
             self._close()
 
 
-class SystemAudioSource:
-    """Spawns the Swift Core Audio tap and streams system output audio."""
+class HelperProcessSource:
+    """Spawns a Swift capture helper and streams its float32 audio.
+
+    Helper protocol: one JSON header line {"rate": N, "channels": 1} on
+    stdout, then raw little-endian float32 mono samples.
+    """
+
+    binary: Path
+    label = "helper"
 
     def __init__(self, segmenter: Segmenter):
         self.segmenter = segmenter
@@ -121,13 +130,18 @@ class SystemAudioSource:
         self._threads: list[threading.Thread] = []
 
     def start(self):
-        if not TAP_BINARY.exists():
-            raise RuntimeError(f"tap binary missing: {TAP_BINARY} — run setup.sh")
+        if not self.binary.exists():
+            raise RuntimeError(f"{self.label} binary missing: {self.binary} — run setup.sh")
         self.proc = subprocess.Popen(
-            [str(TAP_BINARY)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        header = json.loads(self.proc.stdout.readline())
+            [str(self.binary)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        line = self.proc.stdout.readline()
+        if not line:  # helper died before the header — surface its stderr
+            err = self.proc.stderr.read().decode(errors="replace").strip()
+            self.stop()
+            raise RuntimeError(f"{self.label} failed to start: {err or 'no output'}")
+        header = json.loads(line)
         self.rate = int(header["rate"])
-        log.info("system tap streaming at %d Hz", self.rate)
+        log.info("%s streaming at %d Hz", self.label, self.rate)
         for target in (self._read_audio, self._read_stderr):
             t = threading.Thread(target=target, daemon=True)
             t.start()
@@ -147,7 +161,7 @@ class SystemAudioSource:
     def _read_stderr(self):
         assert self.proc and self.proc.stderr
         for line in self.proc.stderr:
-            log.info("tap: %s", line.decode(errors="replace").rstrip())
+            log.info("%s: %s", self.label, line.decode(errors="replace").rstrip())
 
     def stop(self):
         if self.proc:
@@ -159,14 +173,44 @@ class SystemAudioSource:
             self.proc = None
 
 
-class MicSource:
-    """Captures the microphone with sounddevice (CoreAudio resamples to 16 kHz)."""
+class SystemAudioSource(HelperProcessSource):
+    """System-output audio (remote participants) via the Core Audio tap."""
 
-    def __init__(self, segmenter: Segmenter):
+    binary = TAP_BINARY
+    label = "system tap"
+
+
+class AECMicSource(HelperProcessSource):
+    """Microphone through Apple's voice-processing unit: echo cancellation
+    (system playback subtracted from the mic), noise suppression, auto gain.
+    Keeps the mic lane clean even on open speakers."""
+
+    binary = MIC_BINARY
+    label = "mic (echo-cancelled)"
+
+
+class MicSource:
+    """Microphone capture. Prefers the echo-cancelled Swift helper; falls back
+    to a raw sounddevice stream if the helper is missing or fails."""
+
+    def __init__(self, segmenter: Segmenter, aec: bool = True):
         self.segmenter = segmenter
+        self.aec = aec
         self.stream = None
+        self._helper: AECMicSource | None = None
 
     def start(self):
+        if self.aec and MIC_BINARY.exists():
+            try:
+                self._helper = AECMicSource(self.segmenter)
+                self._helper.start()
+                return
+            except Exception as e:
+                log.warning("echo-cancelled mic unavailable (%s) — using raw mic", e)
+                self._helper = None
+        self._start_raw()
+
+    def _start_raw(self):
         import sounddevice as sd
 
         def callback(indata, frames, time_info, status):
@@ -195,6 +239,9 @@ class MicSource:
         log.info("microphone streaming")
 
     def stop(self):
+        if self._helper:
+            self._helper.stop()
+            self._helper = None
         if self.stream:
             self.stream.stop()
             self.stream.close()

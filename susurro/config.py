@@ -4,7 +4,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 DEFAULTS = {
-    "whisper_model": "small",
+    "whisper_model": "medium",
     "language": "",  # "" = auto-detect per utterance; or pin e.g. "ja", "zh", "ko"
     "vocabulary": "",
     "meeting_context": "",
@@ -18,6 +18,8 @@ DEFAULTS = {
     "segment_max_seconds": 12.0,
     "segment_silence_seconds": 0.8,
     "segment_min_speech_seconds": 0.4,
+    "mic_aec": True,  # echo-cancelled mic via Apple voice processing
+    "speaker_ocr": False,  # experimental: name captions via meeting-window OCR
 }
 
 

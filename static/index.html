@@ -115,6 +115,7 @@
   <div class="badge">100% LOCAL · NO CLOUD</div>
   <div class="badge blue" id="modelBadge">whisper</div>
   <div class="spacer"></div>
+  <button id="btnNames" title="Experimental: label participants by reading the active-speaker name from the Zoom/Teams window (screen is OCR'd locally, never stored). Works best in speaker view.">👤 Names: off</button>
   <div class="dot" id="dot"></div>
   <div id="timer">00:00</div>
   <button class="primary" id="btnStart">▶ Start</button>
@@ -173,12 +174,12 @@ function addCaption(c) {
   $("empty") && $("empty").remove();
   const el = document.createElement("div");
   el.className = "cap " + (c.source === "mic" ? "mic" : "sys");
-  const who = c.source === "mic" ? "You" : "Participant";
+  const who = c.source === "mic" ? "You" : (c.speaker || "Participant");
   const t = new Date(c.time * 1000).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit", second:"2-digit"});
   let langBadge = c.lang !== "en" ? `<span class="lang">${c.lang.toUpperCase()} → EN</span>` : "";
   // lang attribute → browser picks the right font/glyphs (e.g. Japanese vs
   // Chinese Han variants) and correct line-breaking for Thai etc.
-  el.innerHTML = `<div class="meta"><span class="who">${who}</span><span>${t}</span>${langBadge}</div>
+  el.innerHTML = `<div class="meta"><span class="who">${esc(who)}</span><span>${t}</span>${langBadge}</div>
     <div>${esc(c.text_en)}</div>` +
     (c.text_orig ? `<div class="orig" lang="${esc(c.lang)}">${esc(c.text_orig)}</div>` : "");
   $("feed").appendChild(el);
@@ -236,6 +237,20 @@ $("btnStart").onclick = async () => {
 };
 $("btnStop").onclick = () => api("/api/stop").catch(e => toast(e.message));
 
+let namesOn = false;
+function setNames(on) {
+  namesOn = on;
+  $("btnNames").textContent = "👤 Names: " + (on ? "on" : "off");
+  $("btnNames").className = on ? "accent2" : "";
+}
+$("btnNames").onclick = async () => {
+  try {
+    const r = await api("/api/speaker/" + (namesOn ? "off" : "on"));
+    setNames(r.enabled);
+    if (r.enabled) toast("Speaker names on (experimental) — first use asks for the Screen Recording permission", 6000);
+  } catch (e) { toast("Speaker names: " + e.message, 8000); }
+};
+
 const GEN = {btnSummary: ["summary", "recap"], btnMinutes: ["minutes", "minutes"], btnEmail: ["email", "email draft"]};
 for (const [btn, [kind, label]] of Object.entries(GEN)) {
   $(btn).onclick = async () => {
@@ -260,10 +275,12 @@ function connect() {
     if (e.type === "snapshot") {
       $("modelBadge").textContent = "whisper:" + e.model + " · " + e.ollama_model;
       setRunning(e.running, e.started_at);
+      setNames(!!e.speaker_enabled);
       for (const c of e.captions) addCaption(c);
     } else if (e.type === "caption") addCaption(e);
     else if (e.type === "level") setLevel(e.source, e.rms);
     else if (e.type === "status") setRunning(e.running, e.started_at);
+    else if (e.type === "speaker") setNames(e.enabled);
   };
   es.onerror = () => { es.close(); setTimeout(connect, 2000); };
 }

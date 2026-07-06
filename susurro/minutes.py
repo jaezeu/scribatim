@@ -15,8 +15,8 @@ log = logging.getLogger("susurro.minutes")
 
 _CONTEXT = """You are an expert meeting assistant.{context} \
 Below is a meeting transcript. Lines are labeled "You" (the person running \
-this tool) and "Participants" (everyone else on the call); non-English speech \
-has been translated to English. \
+this tool); other speakers appear by name when known, otherwise as \
+"Participants". Non-English speech has been translated to English. \
 Be faithful to the transcript — never invent facts, names, or dates. \
 Transcription may contain small errors; smooth over obvious ones.
 """
@@ -33,8 +33,8 @@ Bullet list of the substantive topics (products, use cases, objections, requirem
 ## Decisions
 Bullet list of anything agreed or concluded. Write "None recorded" if empty.
 ## Action Items
-A Markdown table: | # | Action | Owner | Due |. Infer owners ("You" or \
-"Participants") and any dates mentioned; use "TBD" when not stated.
+A Markdown table: | # | Action | Owner | Due |. Infer owners (speaker names \
+when present, else "You"/"Participants") and dates mentioned; "TBD" when unstated.
 ## Open Questions / Risks
 Bullets for unresolved questions, blockers, or risks worth following up.
 
@@ -70,7 +70,7 @@ def transcript_to_text(captions: list[dict]) -> str:
     lines = []
     for c in captions:
         stamp = time.strftime("%H:%M:%S", time.localtime(c["time"]))
-        who = "You" if c["source"] == "mic" else "Participants"
+        who = "You" if c["source"] == "mic" else (c.get("speaker") or "Participants")
         lang = f" [{c['lang']}→en]" if c["lang"] != "en" else ""
         lines.append(f"[{stamp}] {who}{lang}: {c['text_en']}")
     return "\n".join(lines)

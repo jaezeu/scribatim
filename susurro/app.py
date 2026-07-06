@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from .audio import MicSource, Segmenter, SystemAudioSource
 from .config import PROJECT_ROOT, load_config
 from .minutes import PROMPTS, generate, transcript_to_text
+from .speaker import SpeakerTracker
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
 log = logging.getLogger("susurro")
@@ -67,18 +68,46 @@ class State:
         self.transcriber = None
         self.deliverables: dict[str, str] = {}  # kind -> markdown
         self.session_dir: Path | None = None
+        self.speaker: SpeakerTracker | None = None
+        self.speaker_enabled: bool = False
 
 
 state = State()
+state.speaker_enabled = bool(cfg["speaker_ocr"])
 
 
 def broadcast(event: dict):
+    # experimental speaker OCR: label system-audio captions with the name
+    # shown on the meeting window while that segment was being spoken
+    if event["type"] == "caption" and event["source"] == "system" and state.speaker:
+        event["speaker"] = state.speaker.name_for(
+            event["time"] - event["duration"], event["time"])
     if event["type"] == "caption":
         with state.lock:
             state.captions.append(event)
     if state.loop:
         for q in list(state.subscribers):
             state.loop.call_soon_threadsafe(q.put_nowait, event)
+
+
+def _start_speaker_tracker() -> str | None:
+    """Start speaker OCR if enabled; returns a warning string on failure."""
+    if not (state.speaker_enabled and state.speaker is None):
+        return None
+    try:
+        tracker = SpeakerTracker()
+        tracker.start()
+        state.speaker = tracker
+        return None
+    except Exception as e:
+        log.warning("speaker OCR unavailable: %s", e)
+        return f"speaker names: {e}"
+
+
+def _stop_speaker_tracker():
+    tracker, state.speaker = state.speaker, None
+    if tracker:
+        tracker.stop()
 
 
 @app.middleware("http")
@@ -143,7 +172,8 @@ async def start():
 
     errors = []
     system = SystemAudioSource(Segmenter("system", on_segment, on_level, **seg_kwargs))
-    mic = MicSource(Segmenter("mic", on_segment, on_level, **seg_kwargs))
+    mic = MicSource(Segmenter("mic", on_segment, on_level, **seg_kwargs),
+                    aec=cfg["mic_aec"])
     # mic first: opening it during the tap's aggregate-device creation can hang
     for name, src in (("mic", mic), ("system", system)):
         try:
@@ -163,6 +193,10 @@ async def start():
         await stop()
         return JSONResponse({"ok": False, "errors": errors}, status_code=500)
 
+    warning = await asyncio.to_thread(_start_speaker_tracker)
+    if warning:
+        errors.append(warning)  # non-fatal: captions just lack names
+
     broadcast({"type": "status", "running": True, "started_at": state.started_at,
                "errors": errors})
     return {"ok": True, "errors": errors}
@@ -180,9 +214,27 @@ async def stop():
             await asyncio.to_thread(src.stop)
         except Exception:
             log.exception("source stop failed")
+    await asyncio.to_thread(_stop_speaker_tracker)
     _save_session()
     broadcast({"type": "status", "running": False, "started_at": None, "errors": []})
     return {"ok": True, "captions": len(state.captions)}
+
+
+@app.post("/api/speaker/{action}")
+async def speaker_toggle(action: str):
+    if action not in ("on", "off"):
+        return JSONResponse({"ok": False, "error": "unknown action"}, status_code=404)
+    state.speaker_enabled = action == "on"
+    if not state.speaker_enabled:
+        await asyncio.to_thread(_stop_speaker_tracker)
+    elif state.running:
+        warning = await asyncio.to_thread(_start_speaker_tracker)
+        if warning:
+            state.speaker_enabled = False
+            broadcast({"type": "speaker", "enabled": False})
+            return JSONResponse({"ok": False, "error": warning}, status_code=503)
+    broadcast({"type": "speaker", "enabled": state.speaker_enabled})
+    return {"ok": True, "enabled": state.speaker_enabled}
 
 
 @app.post("/api/generate/{kind}")
@@ -217,6 +269,7 @@ async def events(request: Request):
                     "captions": state.captions[-200:],
                     "model": cfg["whisper_model"],
                     "ollama_model": cfg["ollama_model"],
+                    "speaker_enabled": state.speaker_enabled,
                 }
             yield f"data: {json.dumps(snapshot)}\n\n"
             while True:
