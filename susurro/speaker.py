@@ -90,6 +90,15 @@ class SpeakerTracker:
             raise RuntimeError(f"speaker helper missing: {SPEAKER_BINARY} — run setup.sh")
         self.proc = subprocess.Popen(
             [str(SPEAKER_BINARY)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        # the helper dies immediately when Screen Recording permission is
+        # missing — surface that instead of silently showing no names
+        time.sleep(0.8)
+        if self.proc.poll() is not None:
+            err = self.proc.stderr.read().decode(errors="replace").strip()
+            self.proc = None
+            raise RuntimeError(
+                err.replace("[speaker] ", "").replace("\n", " ")
+                or "speaker helper exited at startup")
         for target in (self._read_frames, self._read_stderr):
             threading.Thread(target=target, daemon=True).start()
         log.info("speaker OCR running (experimental)")
@@ -105,6 +114,9 @@ class SpeakerTracker:
             name = pick_name(frame.get("texts", []))
             if name:
                 self.samples.append((float(frame.get("time", time.time())), name))
+        if self.proc is not None:  # EOF without stop(): the helper died
+            log.warning("speaker helper exited unexpectedly — captions will "
+                        "show 'Participant' until Names is toggled off/on")
 
     def _read_stderr(self):
         proc = self.proc
@@ -130,3 +142,48 @@ class SpeakerTracker:
             except subprocess.TimeoutExpired:
                 self.proc.kill()
             self.proc = None
+
+
+def _debug(seconds: float = 15.0):  # pragma: no cover
+    """`python -m susurro.speaker` — dump what the OCR sees during a live
+    meeting and what the picker chooses, for tuning the heuristics.
+    Run from a terminal that has the Screen Recording permission."""
+    from pathlib import Path
+    out_path = Path("~/Documents/Susurro/speaker_debug.txt").expanduser()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    lines = []
+
+    def emit(s):
+        print(s)
+        lines.append(s)
+
+    proc = subprocess.Popen(
+        [str(SPEAKER_BINARY)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    threading.Thread(
+        target=lambda: [emit(f"  [helper] {l.decode(errors='replace').rstrip()}")
+                        for l in proc.stderr], daemon=True).start()
+    deadline = time.time() + seconds
+    frame_no = 0
+    try:
+        for line in proc.stdout:
+            if time.time() > deadline:
+                break
+            try:
+                frame = json.loads(line)
+            except ValueError:
+                continue
+            frame_no += 1
+            texts = frame.get("texts", [])
+            emit(f"--- frame {frame_no}: {len(texts)} texts ---")
+            for it in sorted(texts, key=lambda i: (-i.get('y', 0), i.get('x', 0))):
+                emit(f"  x={it.get('x', 0):.2f} y={it.get('y', 0):.2f} "
+                     f"conf={it.get('conf', 0):.2f}  {it.get('text', '')!r}")
+            emit(f"  => picked: {pick_name(texts)!r}")
+    finally:
+        proc.terminate()
+    out_path.write_text("\n".join(lines) + "\n")
+    print(f"\nsaved to {out_path}")
+
+
+if __name__ == "__main__":  # pragma: no cover
+    _debug()

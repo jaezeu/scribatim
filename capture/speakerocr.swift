@@ -15,6 +15,7 @@
 // run). Frames are OCR'd in memory and discarded; nothing is written to disk
 // and nothing leaves the machine.
 
+import CoreGraphics
 import CoreMedia
 import Foundation
 import ScreenCaptureKit
@@ -23,6 +24,12 @@ import Vision
 func log(_ message: String) {
     FileHandle.standardError.write(("[speaker] " + message + "\n").data(using: .utf8)!)
 }
+
+// CLI tools have no window-server connection until something initializes
+// CoreGraphics; starting an SCStream without one aborts with
+// "Assertion failed: (did_initialize), CGS_REQUIRE_INIT". Touching the main
+// display establishes the connection up front.
+_ = CGMainDisplayID()
 
 let MEETING_BUNDLES = [
     "us.zoom.xos",            // Zoom
@@ -82,7 +89,8 @@ final class Capture: NSObject, SCStreamOutput, SCStreamDelegate {
                 }
                 return
             }
-            self.attach(to: window)
+            // stream setup must run on the main thread, not SCK's callback queue
+            DispatchQueue.main.async { self.attach(to: window) }
         }
     }
 

@@ -44,6 +44,12 @@ if #available(macOS 14.0, *) {
             enableAdvancedDucking: false, duckingLevel: .min)
 }
 
+// AGC adjusts the *hardware* input gain, which is shared machine-wide: with
+// meeting audio playing, it winds the mic down and the user goes quiet in
+// the actual call (Teams/Zoom read the same turned-down mic). Echo
+// cancellation is what we want from the voice unit — gain control is not.
+input.isVoiceProcessingAGCEnabled = false
+
 let format = input.outputFormat(forBus: 0)
 let rate = Int(format.sampleRate)
 let channels = Int(format.channelCount)

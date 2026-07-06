@@ -25,6 +25,24 @@ log = logging.getLogger("susurro.stt")
 # spurious breaks mid-sentence.
 NO_SPACE_LANGS = {"zh", "yue", "ja", "th", "lo", "my", "km"}
 
+# Whisper's classic hallucinations on faint/garbled audio (echo residue the
+# AEC didn't fully cancel, distant murmur). Dropped only when the segment is
+# also quiet — a real, direct utterance of these is much louder.
+HALLUCINATION_PHRASES = {
+    "thank you", "thanks", "thank you very much", "thanks for watching",
+    "thank you for watching", "bye", "you", "subscribe",
+    "please subscribe", "see you next time", "so",
+}
+HALLUCINATION_RMS = 0.02  # direct mic speech w/ AGC is typically ≥0.05
+
+
+def is_hallucination(text_en: str, audio: np.ndarray) -> bool:
+    """True when a decoded caption is one of Whisper's stock hallucination
+    phrases AND the audio is too quiet to be a real, direct utterance."""
+    if text_en.strip(" .!?,¡¿").lower() not in HALLUCINATION_PHRASES:
+        return False
+    return float(np.sqrt(np.mean(audio ** 2))) < HALLUCINATION_RMS
+
 # Verified mlx-community conversions of the OpenAI Whisper weights.
 MLX_REPOS = {
     "tiny": "mlx-community/whisper-tiny",
@@ -107,6 +125,18 @@ class Transcriber:
         except queue.Full:
             log.warning("transcription queue full, dropping %.1fs segment", len(audio) / 16000)
 
+    def _has_speech(self, audio: np.ndarray) -> bool:
+        """Silero VAD pre-check: Whisper hallucinates captions ("Thank you",
+        random foreign words) on breaths/keyboard/noise that pass the energy
+        gate. The CT2 backend filters these internally (vad_filter=True);
+        MLX has no VAD, so we run the same Silero model ourselves."""
+        try:
+            from faster_whisper.vad import VadOptions, get_speech_timestamps
+            return bool(get_speech_timestamps(
+                audio, VadOptions(threshold=0.6, min_speech_duration_ms=300)))
+        except Exception:
+            return True  # never drop captions because the VAD failed
+
     def _prompt_for(self, task: str, language):
         # The vocabulary prompt is English text; priming a non-English
         # transcription pass with it pulls the decoder toward Latin output.
@@ -122,6 +152,8 @@ class Transcriber:
         return self._decode_ct2(audio, task, language)
 
     def _decode_mlx(self, audio: np.ndarray, task: str, language=None):
+        if task == "translate" and not self._has_speech(audio):
+            return "", language or "en", 0.0
         result = self._mlx.transcribe(
             audio, path_or_hf_repo=self._mlx_repo,
             task=task, language=language,
@@ -158,6 +190,9 @@ class Transcriber:
                 forced = self.cfg.get("language") or None
                 text_en, detected, prob = self._decode(audio, "translate", language=forced)
                 if not text_en:
+                    continue
+                if is_hallucination(text_en, audio):
+                    log.info("dropped likely hallucination on quiet audio: %r", text_en)
                     continue
                 lang = forced or detected
                 event = {
