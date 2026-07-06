@@ -39,11 +39,13 @@ echo "==> Python environment…"
 
 echo "==> Downloading Whisper model (one-time)…"
 .venv/bin/python - <<'PY'
-import json, pathlib
-cfg = json.loads(pathlib.Path("config.json").read_text())
-from faster_whisper import WhisperModel
-WhisperModel(cfg["whisper_model"], device="cpu", compute_type=cfg["compute_type"])
-print("    whisper", cfg["whisper_model"], "ready")
+import logging
+logging.basicConfig(level=logging.INFO, format="    %(message)s")
+from susurro.config import load_config
+from susurro.transcriber import Transcriber
+# loads (and downloads on first run) whichever backend this Mac will use:
+# MLX on Apple Silicon, CTranslate2/CPU otherwise
+Transcriber(load_config(), lambda e: None).load()
 PY
 
 echo "==> Ollama (local minutes LLM)…"
