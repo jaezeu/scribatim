@@ -237,14 +237,44 @@ async def speaker_toggle(action: str):
     return {"ok": True, "enabled": state.speaker_enabled}
 
 
+def _installed_models() -> list[str]:
+    import requests
+    r = requests.get(f"{cfg['ollama_url']}/api/tags", timeout=3)
+    r.raise_for_status()
+    return [m["name"] for m in r.json().get("models", [])]
+
+
+@app.get("/api/models")
+async def models():
+    """Installed Ollama models, for the quality dropdown."""
+    try:
+        names = await asyncio.to_thread(_installed_models)
+    except Exception:
+        names = []
+    if cfg["ollama_model"] not in names:
+        names.insert(0, cfg["ollama_model"])
+    return {"default": cfg["ollama_model"], "models": names}
+
+
 @app.post("/api/generate/{kind}")
-async def generate_deliverable(kind: str):
+async def generate_deliverable(kind: str, model: str | None = None):
     if kind not in PROMPTS:
         return JSONResponse({"ok": False, "error": "unknown deliverable"}, status_code=404)
+    gen_cfg = cfg
+    if model and model != cfg["ollama_model"]:
+        try:
+            installed = await asyncio.to_thread(_installed_models)
+        except Exception:
+            installed = []
+        if model not in installed:
+            return JSONResponse(
+                {"ok": False, "error": f"model '{model}' is not installed — "
+                 f"run: ollama pull {model}"}, status_code=400)
+        gen_cfg = dict(cfg, ollama_model=model)
     with state.lock:
         captions = list(state.captions)
     try:
-        md = await asyncio.to_thread(generate, cfg, kind, captions)
+        md = await asyncio.to_thread(generate, gen_cfg, kind, captions)
     except RuntimeError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=503)
     with state.lock:

@@ -99,6 +99,12 @@
   #minutes th, #minutes td { border: 1px solid var(--border); padding: 5px 8px; text-align: left; }
   #minutes th { color: var(--text); background: var(--panel2); }
   #minutes .hint { color: var(--faint); font-style: italic; }
+  .modelrow { display: flex; gap: 10px; align-items: center; padding: 0 20px 10px; }
+  .modelrow label { font: 11px var(--mono); color: var(--faint); letter-spacing: 1px; }
+  .modelrow select {
+    flex: 1; font: 600 12.5px var(--mono); color: var(--text); background: var(--panel2);
+    border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; cursor: pointer;
+  }
   .sidebtns { display: flex; gap: 10px; padding: 0 20px 20px; }
   .sidebtns button { flex: 1; }
   #toast {
@@ -140,6 +146,10 @@
       nothing leaves this Mac. <b>Recap</b> works mid-meeting; after the call,
       generate <b>Minutes</b> or a follow-up <b>Email</b> draft.
       Everything is saved to ~/Documents/Susurro.</span></div>
+    <div class="modelrow">
+      <label for="selModel">LLM</label>
+      <select id="selModel" title="Which local Ollama model writes the deliverables — pull more with `ollama pull <model>` to see them here"></select>
+    </div>
     <div class="sidebtns">
       <button class="accent2" id="btnSummary" title="Quick recap — usable mid-meeting">⚡ Recap</button>
       <button class="accent2" id="btnMinutes" title="Full minutes with action items">✦ Minutes</button>
@@ -251,13 +261,33 @@ $("btnNames").onclick = async () => {
   } catch (e) { toast("Speaker names: " + e.message, 8000); }
 };
 
+// header badge tracks the whisper model (from the server) and whichever
+// LLM is currently selected in the dropdown
+let whisperModel = "", defaultLLM = "";
+function updateBadge() {
+  const llm = $("selModel").value || defaultLLM;
+  if (whisperModel) $("modelBadge").textContent = "whisper:" + whisperModel + " · " + llm;
+}
+$("selModel").onchange = updateBadge;
+
+// populate the LLM quality dropdown with installed Ollama models
+(async () => {
+  try {
+    const r = await fetch("/api/models").then(x => x.json());
+    $("selModel").innerHTML = r.models.map(m =>
+      `<option${m === r.default ? " selected" : ""}>${esc(m)}</option>`).join("");
+    updateBadge();
+  } catch (e) { /* dropdown stays empty; generate falls back to the default */ }
+})();
+
 const GEN = {btnSummary: ["summary", "recap"], btnMinutes: ["minutes", "minutes"], btnEmail: ["email", "email draft"]};
 for (const [btn, [kind, label]] of Object.entries(GEN)) {
   $(btn).onclick = async () => {
     for (const b of Object.keys(GEN)) $(b).disabled = true;
-    $("minutes").innerHTML = `<span class="hint">The local LLM is writing your ${label}… (20–90s)</span>`;
+    $("minutes").innerHTML = `<span class="hint">The local LLM is writing your ${label}… (longer meetings take longer)</span>`;
     try {
-      const r = await api("/api/generate/" + kind);
+      const model = $("selModel").value;
+      const r = await api("/api/generate/" + kind + (model ? "?model=" + encodeURIComponent(model) : ""));
       minutesMd = r.markdown;
       $("minutes").innerHTML = md(r.markdown);
       $("btnCopy").disabled = false;
@@ -273,7 +303,8 @@ function connect() {
   es.onmessage = ev => {
     const e = JSON.parse(ev.data);
     if (e.type === "snapshot") {
-      $("modelBadge").textContent = "whisper:" + e.model + " · " + e.ollama_model;
+      whisperModel = e.model; defaultLLM = e.ollama_model;
+      updateBadge();
       setRunning(e.running, e.started_at);
       setNames(!!e.speaker_enabled);
       for (const c of e.captions) addCaption(c);
