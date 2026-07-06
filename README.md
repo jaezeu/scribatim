@@ -10,7 +10,7 @@ recaps, and follow-up email drafts** with a local LLM.
 
 **No cloud. No bots joining your call. No audio files on disk. Nothing leaves your Mac.**
 
-![Susurro dashboard — live translated captions with speaker names on the left; audio meters, generated minutes with action items, and one-click Recap / Minutes / Email on the right](docs/dashboard.svg)
+![Susurro dashboard — live translated captions with speaker names on the left; audio meters, generated minutes with action items, and one-click Recap / Minutes / Email on the right](docs/dashboard.png)
 
 ## How it works
 
