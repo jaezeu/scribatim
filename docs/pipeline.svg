@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 500" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 9 5 L 0 9 z" fill="#5a6275"/>
+    </marker>
+    <marker id="arrg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 1 L 9 5 L 0 9 z" fill="#6fe3b4"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1200" height="500" rx="14" fill="#0b0e14"/>
+  <rect x="0.5" y="0.5" width="1199" height="499" rx="14" fill="none" stroke="#232a3b"/>
+
+  <!-- sources column -->
+  <rect x="36" y="60" width="240" height="72" rx="12" fill="#11151f" stroke="#232a3b"/>
+  <text x="156" y="90" font-size="14" font-weight="600" fill="#e8ecf4" text-anchor="middle">Teams / Zoom / Meet</text>
+  <text x="156" y="112" font-size="12" fill="#8b94a7" text-anchor="middle">any app playing audio</text>
+
+  <rect x="36" y="182" width="240" height="72" rx="12" fill="#11151f" stroke="#232a3b"/>
+  <text x="156" y="212" font-size="14" font-weight="600" fill="#e8ecf4" text-anchor="middle">Your microphone</text>
+  <text x="156" y="234" font-size="12" fill="#8b94a7" text-anchor="middle">what you say</text>
+
+  <rect x="36" y="304" width="240" height="72" rx="12" fill="#11151f" stroke="#232a3b" stroke-dasharray="5 4"/>
+  <text x="156" y="334" font-size="14" font-weight="600" fill="#e8ecf4" text-anchor="middle">Meeting window</text>
+  <text x="156" y="356" font-size="12" fill="#8b94a7" text-anchor="middle">pixels already on screen</text>
+
+  <!-- capture column -->
+  <rect x="356" y="60" width="250" height="72" rx="12" fill="#131a2b" stroke="#22304f"/>
+  <text x="481" y="90" font-size="14" font-weight="600" fill="#7aa2ff" text-anchor="middle">Core Audio tap</text>
+  <text x="481" y="112" font-size="12" fill="#8b94a7" text-anchor="middle">read-only on the output mix</text>
+
+  <rect x="356" y="182" width="250" height="72" rx="12" fill="#131a2b" stroke="#22304f"/>
+  <text x="481" y="212" font-size="14" font-weight="600" fill="#7aa2ff" text-anchor="middle">Echo-cancelled capture</text>
+  <text x="481" y="234" font-size="12" fill="#8b94a7" text-anchor="middle">Apple voice processing (AEC)</text>
+
+  <rect x="356" y="304" width="250" height="72" rx="12" fill="#131a2b" stroke="#22304f" stroke-dasharray="5 4"/>
+  <text x="481" y="328" font-size="14" font-weight="600" fill="#7aa2ff" text-anchor="middle">Speaker-name OCR</text>
+  <text x="481" y="348" font-size="12" fill="#8b94a7" text-anchor="middle">Vision framework, ~1 fps</text>
+  <text x="481" y="366" font-size="11" fill="#5a6275" text-anchor="middle">optional 👤 toggle, off by default</text>
+
+  <!-- whisper -->
+  <rect x="690" y="118" width="222" height="100" rx="12" fill="#10201a" stroke="#1e3a30"/>
+  <text x="801" y="152" font-size="15" font-weight="700" fill="#6fe3b4" text-anchor="middle">Whisper (local)</text>
+  <text x="801" y="176" font-size="12" fill="#8b94a7" text-anchor="middle">any language → English</text>
+  <text x="801" y="194" font-size="12" fill="#8b94a7" text-anchor="middle">handles mid-sentence switching</text>
+
+  <!-- captions -->
+  <rect x="972" y="118" width="192" height="100" rx="12" fill="#11151f" stroke="#232a3b"/>
+  <text x="1068" y="152" font-size="15" font-weight="700" fill="#e8ecf4" text-anchor="middle">Live captions</text>
+  <text x="1068" y="176" font-size="12" fill="#8b94a7" text-anchor="middle">EN + original script</text>
+  <text x="1068" y="194" font-size="12" fill="#8b94a7" text-anchor="middle">named speakers</text>
+
+  <!-- llm -->
+  <rect x="690" y="330" width="222" height="100" rx="12" fill="#10201a" stroke="#1e3a30"/>
+  <text x="801" y="364" font-size="15" font-weight="700" fill="#6fe3b4" text-anchor="middle">Ollama LLM (local)</text>
+  <text x="801" y="388" font-size="12" fill="#8b94a7" text-anchor="middle">writes from the transcript</text>
+  <text x="801" y="406" font-size="12" fill="#8b94a7" text-anchor="middle">on demand, on device</text>
+
+  <!-- deliverables -->
+  <rect x="972" y="330" width="192" height="100" rx="12" fill="#11151f" stroke="#232a3b"/>
+  <text x="1068" y="362" font-size="14" font-weight="700" fill="#e8ecf4" text-anchor="middle">⚡ Recap</text>
+  <text x="1068" y="386" font-size="14" font-weight="700" fill="#e8ecf4" text-anchor="middle">✦ Minutes</text>
+  <text x="1068" y="410" font-size="14" font-weight="700" fill="#e8ecf4" text-anchor="middle">✉ Email draft</text>
+
+  <!-- arrows -->
+  <line x1="276" y1="96" x2="348" y2="96" stroke="#5a6275" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="276" y1="218" x2="348" y2="218" stroke="#5a6275" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="276" y1="340" x2="348" y2="340" stroke="#5a6275" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arr)"/>
+
+  <path d="M 606 96 C 650 96 650 148 682 150" fill="none" stroke="#5a6275" stroke-width="1.5" marker-end="url(#arr)"/>
+  <path d="M 606 218 C 650 218 650 188 682 186" fill="none" stroke="#5a6275" stroke-width="1.5" marker-end="url(#arr)"/>
+  <path d="M 606 340 C 780 340 900 260 1046 224" fill="none" stroke="#5a6275" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arr)"/>
+
+  <line x1="912" y1="168" x2="964" y2="168" stroke="#6fe3b4" stroke-width="1.5" marker-end="url(#arrg)"/>
+  <path d="M 1068 226 C 1068 290 950 300 918 344" fill="none" stroke="#5a6275" stroke-width="1.5" marker-end="url(#arr)"/>
+  <line x1="912" y1="380" x2="964" y2="380" stroke="#6fe3b4" stroke-width="1.5" marker-end="url(#arrg)"/>
+
+  <!-- footer -->
+  <line x1="36" y1="452" x2="1164" y2="452" stroke="#232a3b"/>
+  <text x="600" y="480" font-size="13" fill="#6fe3b4" text-anchor="middle" font-weight="600">
+    everything runs on your Mac — no cloud, no bot in the call, raw audio and frames never touch disk</text>
+</svg>

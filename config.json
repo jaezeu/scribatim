@@ -1,9 +1,10 @@
 {
-  "whisper_model": "small",
+  "whisper_model": "medium",
+  "language": "",
   "vocabulary": "",
   "meeting_context": "",
   "compute_type": "int8",
-  "beam_size": 1,
+  "beam_size": 5,
   "show_original": true,
   "ollama_model": "llama3.2:3b",
   "ollama_url": "http://127.0.0.1:11434",
@@ -11,5 +12,7 @@
   "save_dir": "~/Documents/Susurro",
   "segment_max_seconds": 12.0,
   "segment_silence_seconds": 0.8,
-  "segment_min_speech_seconds": 0.4
+  "segment_min_speech_seconds": 0.4,
+  "mic_aec": true,
+  "speaker_ocr": false
 }

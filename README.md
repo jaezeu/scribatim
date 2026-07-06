@@ -10,20 +10,18 @@ recaps, and follow-up email drafts** with a local LLM.
 
 **No cloud. No bots joining your call. No audio files on disk. Nothing leaves your Mac.**
 
-```
- Teams/Zoom/Meet ──▶ macOS audio ──▶ Core Audio tap (Swift) ─┐
-                                                             ├─▶ Whisper (local) ─▶ live captions (EN)
- Your voice ───────▶ microphone ─────────────────────────────┘        │
-                                                                      ▼
-                                                     Ollama llama3.2 (local) ─▶ minutes.md
-```
+![Susurro dashboard — live translated captions with speaker names on the left; audio meters, generated minutes with action items, and one-click Recap / Minutes / Email on the right](docs/dashboard.svg)
+
+## How it works
+
+![Pipeline: meeting apps feed a read-only Core Audio tap and your mic feeds an echo-cancelled capture; both flow into local Whisper for translated live captions. Optionally, on-screen speaker names are OCR'd locally. A local Ollama LLM turns the transcript into recap, minutes, and an email draft.](docs/pipeline.svg)
 
 ## Requirements
 
 - macOS **14.4+** (Apple Silicon or Intel) — uses Core Audio process taps
 - Xcode Command Line Tools (`xcode-select --install`)
 - [Homebrew](https://brew.sh) and Python **3.10+**
-- ~3 GB disk for the local models (Whisper `small` + `llama3.2:3b`)
+- ~4 GB disk for the local models (Whisper `medium` + `llama3.2:3b`)
 
 ## Quick start
 
@@ -65,12 +63,14 @@ First launch triggers two one-time macOS privacy prompts for your terminal:
 
 | Key | Default | Notes |
 |-----|---------|-------|
-| `whisper_model` | `small` | `medium` / `large-v3` = better accuracy, more latency |
+| `whisper_model` | `medium` | `small` = faster/lighter; `large-v3` = best accuracy, more latency |
 | `language` | `""` (auto) | pin the source language (e.g. `"ja"`, `"zh"`, `"ko"`, `"hi"`) if auto-detect misfires |
 | `show_original` | `true`  | also show untranslated text under each caption |
 | `ollama_model`  | `llama3.2:3b` | any Ollama model, e.g. `qwen2.5:7b` for richer minutes |
 | `vocabulary` | `""` | jargon/product names to bias transcription, e.g. `"Kubernetes, Terraform, POC"` |
 | `meeting_context` | `""` | one sentence about you/your meetings to shape minutes & emails, e.g. `"You are a sales engineer meeting customers."` |
+| `mic_aec` | `true` | echo-cancelled mic (Apple voice processing): on open speakers, meeting audio is subtracted from your mic lane. Set `false` for the raw mic |
+| `speaker_ocr` | `false` | start with speaker names on (same as the 👤 toggle in the dashboard) |
 | `segment_silence_seconds` | `0.8` | pause length that ends an utterance |
 
 After changing `whisper_model` or `ollama_model`, run `./setup.sh` once to fetch it.
@@ -82,13 +82,29 @@ Korean, Thai, Vietnamese, Hindi, Tamil, Indonesian, Tagalog, and ~90 more.
 Original-language captions render with the correct script, glyph variants,
 and line-breaking. Two tips for best results:
 
-- The `small` model's accuracy drops noticeably on Asian languages; set
-  `whisper_model` to `medium` (good balance) or `large-v3` (best) for
-  CJK/Thai/Vietnamese-heavy meetings, then re-run `./setup.sh`.
+- The default `medium` model handles Asian languages well; `large-v3` is
+  noticeably better still if you can take the extra latency. Avoid `small`
+  for CJK/Thai/Vietnamese-heavy meetings — its accuracy drops sharply.
 - Auto-detection can confuse related languages on short utterances
   (e.g. Mandarin/Cantonese/Japanese, Malay/Indonesian). For a
   single-language meeting, pin it with e.g. `"language": "ja"` — this also
   skips detection, reducing latency. Leave it `""` for mixed-language calls.
+
+### Speaker names (experimental)
+
+The **👤 Names** toggle labels participant captions with real names — no bot
+in the call: it reads the active-speaker name that Zoom/Teams already draw on
+screen, using ScreenCaptureKit + Apple's on-device Vision OCR (~1 frame/s,
+OCR'd in memory, never stored). Minutes then get real action-item owners
+("Alice to send pricing by Friday" instead of "Participant").
+
+- Off by default; first use prompts for the **Screen Recording** permission.
+- Best-effort by design: works best in **speaker view** on Zoom / Teams
+  desktop; in gallery view it abstains rather than guess. Overlapping voices
+  follow whoever the meeting app highlights. Expect occasional mislabels.
+- Teams: keep the meeting in its own pop-out window (the Teams default) —
+  the main Chat/Activity window is deliberately ignored.
+- Meet/browser meetings aren't recognized yet (desktop Zoom/Teams only).
 
 ## Platform support
 
@@ -111,8 +127,13 @@ WASAPI-loopback capture backend and keep the rest unchanged. PRs welcome.
 
 - Works with **any** meeting app — nothing is injected into the call; the tap is
   read-only on the Mac's output mix.
+- Headphones optional: the mic is captured through Apple's voice-processing
+  engine (echo cancellation), so on open speakers your lane hears you, not the
+  meeting playback. If the helper can't start, Susurro falls back to the raw mic
+  — then headphones are recommended.
 - If you switch audio output devices mid-meeting (e.g. AirPods connect), press
   Stop/Start to re-attach the tap to the new device.
 - Translation quality: Whisper translates *to English only* (that's the use case).
-- `small` runs comfortably in real time on Apple Silicon; bump to `medium` if
-  accuracy on heavy accents matters more than latency.
+- `medium` (the default) keeps up with live speech on Apple Silicon; drop to
+  `small` on older Macs if captions lag, or go `large-v3` when accuracy on
+  heavy accents matters more than latency.

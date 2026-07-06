@@ -24,6 +24,14 @@ mkdir -p bin
 swiftc -O capture/systemaudio.swift -o bin/susurro-tap \
   -framework CoreAudio -framework AudioToolbox
 
+echo "==> Compiling echo-cancelled mic helper (Swift)…"
+swiftc -O capture/micaec.swift -o bin/susurro-mic \
+  -framework AVFoundation
+
+echo "==> Compiling speaker-OCR helper (Swift)…"
+swiftc -O capture/speakerocr.swift -o bin/susurro-speaker \
+  -framework ScreenCaptureKit -framework Vision -framework CoreMedia
+
 echo "==> Python environment…"
 [[ -d .venv ]] || python3 -m venv .venv
 .venv/bin/pip install --quiet --upgrade pip
