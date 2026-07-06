@@ -5,6 +5,7 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 DEFAULTS = {
     "whisper_model": "medium",
+    "whisper_backend": "auto",  # auto | mlx (Metal GPU) | ct2 (CPU)
     "language": "",  # "" = auto-detect per utterance; or pin e.g. "ja", "zh", "ko"
     "vocabulary": "",
     "meeting_context": "",
@@ -13,6 +14,7 @@ DEFAULTS = {
     "show_original": True,
     "ollama_model": "llama3.2:3b",
     "ollama_url": "http://127.0.0.1:11434",
+    "llm_num_ctx": 8192,  # LLM context window; long meetings are chunked to fit
     "port": 8710,
     "save_dir": "~/Documents/Susurro",
     "segment_max_seconds": 12.0,

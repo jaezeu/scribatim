@@ -1,5 +1,6 @@
 {
   "whisper_model": "medium",
+  "whisper_backend": "auto",
   "language": "",
   "vocabulary": "",
   "meeting_context": "",
@@ -8,6 +9,7 @@
   "show_original": true,
   "ollama_model": "llama3.2:3b",
   "ollama_url": "http://127.0.0.1:11434",
+  "llm_num_ctx": 8192,
   "port": 8710,
   "save_dir": "~/Documents/Susurro",
   "segment_max_seconds": 12.0,

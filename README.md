@@ -64,9 +64,11 @@ First launch triggers two one-time macOS privacy prompts for your terminal:
 | Key | Default | Notes |
 |-----|---------|-------|
 | `whisper_model` | `medium` | `small` = faster/lighter; `large-v3` = best accuracy, more latency |
+| `whisper_backend` | `auto` | `auto` = Metal GPU (MLX) on Apple Silicon, CPU elsewhere; force with `mlx`/`ct2` |
+| `llm_num_ctx` | `8192` | LLM context window; longer meetings are automatically condensed to fit |
 | `language` | `""` (auto) | pin the source language (e.g. `"ja"`, `"zh"`, `"ko"`, `"hi"`) if auto-detect misfires |
 | `show_original` | `true`  | also show untranslated text under each caption |
-| `ollama_model`  | `llama3.2:3b` | any Ollama model, e.g. `qwen2.5:7b` for richer minutes |
+| `ollama_model`  | `llama3.2:3b` | default LLM for deliverables; the dashboard's **LLM dropdown** offers every pulled model per-generation — `ollama pull qwen2.5:7b` for richer minutes |
 | `vocabulary` | `""` | jargon/product names to bias transcription, e.g. `"Kubernetes, Terraform, POC"` |
 | `meeting_context` | `""` | one sentence about you/your meetings to shape minutes & emails, e.g. `"You are a sales engineer meeting customers."` |
 | `mic_aec` | `true` | echo-cancelled mic (Apple voice processing): on open speakers, meeting audio is subtracted from your mic lane. Set `false` for the raw mic |
@@ -134,6 +136,11 @@ WASAPI-loopback capture backend and keep the rest unchanged. PRs welcome.
 - If you switch audio output devices mid-meeting (e.g. AirPods connect), press
   Stop/Start to re-attach the tap to the new device.
 - Translation quality: Whisper translates *to English only* (that's the use case).
-- `medium` (the default) keeps up with live speech on Apple Silicon; drop to
-  `small` on older Macs if captions lag, or go `large-v3` when accuracy on
-  heavy accents matters more than latency.
+- On Apple Silicon, Whisper runs on the **Metal GPU via MLX** — `medium` (the
+  default) keeps up with live speech comfortably, and `large-v3` is viable
+  when accuracy matters more than latency. Intel Macs fall back to CPU
+  (CTranslate2); prefer `small` there if captions lag. (`beam_size` applies
+  to the CPU backend only.)
+- Meeting minutes handle any meeting length: transcripts too long for the
+  LLM's context window are condensed chunk-by-chunk first, so the start of a
+  long meeting is never silently dropped.
