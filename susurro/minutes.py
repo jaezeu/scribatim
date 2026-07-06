@@ -4,6 +4,13 @@ Three generators share one transcript format:
   minutes  — full structured minutes with action items
   summary  — quick "where are we" recap, usable mid-meeting
   email    — ready-to-send follow-up email draft
+
+Long meetings don't fit the model's context window, and Ollama silently drops
+the *start* of an oversized prompt — exactly where the agenda and early
+decisions live. So generation is map-reduce: transcripts that fit go through
+in one pass; longer ones are compressed chunk-by-chunk into dense notes
+(keeping names, dates, numbers, commitments), and the deliverable is written
+from the notes.
 """
 
 import logging
@@ -66,6 +73,21 @@ TRANSCRIPT:
 }
 
 
+CHUNK_PROMPT = _CONTEXT + """
+This is part {part} of {parts} of a long meeting. Compress it into dense notes
+for a later summarization pass, under exactly these headings:
+### Discussion
+### Decisions
+### Action items (with owner and due date)
+### Open questions
+Keep every name, number, date, and commitment. Drop greetings and filler.
+Write "None" under a heading with nothing to report.
+
+TRANSCRIPT PART {part}/{parts}:
+{transcript}
+"""
+
+
 def transcript_to_text(captions: list[dict]) -> str:
     lines = []
     for c in captions:
@@ -76,17 +98,33 @@ def transcript_to_text(captions: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def generate(cfg: dict, kind: str, captions: list[dict]) -> str:
-    if kind not in PROMPTS:
-        raise ValueError(f"unknown deliverable: {kind}")
-    if not captions:
-        raise RuntimeError("no transcript captured yet")
-    ctx = (cfg.get("meeting_context") or "").strip()
-    prompt = PROMPTS[kind].format(
-        context=f" {ctx}" if ctx else "",
-        date=time.strftime("%Y-%m-%d %H:%M"),
-        transcript=transcript_to_text(captions))
-    log.info("generating %s with %s (%d captions)…", kind, cfg["ollama_model"], len(captions))
+def _estimate_tokens(text: str) -> int:
+    # ~4 chars/token for English prose; timestamps and names tokenize worse,
+    # so use 3 to err toward chunking rather than silent truncation
+    return len(text) // 3
+
+
+def _input_budget(cfg: dict) -> int:
+    # leave headroom in the context window for the prompt and the response
+    return max(1024, int(cfg.get("llm_num_ctx", 8192)) - 2800)
+
+
+def _split_lines(lines: list[str], budget: int) -> list[str]:
+    """Pack lines into the fewest parts that each fit the token budget."""
+    parts, current, size = [], [], 0
+    for line in lines:
+        t = _estimate_tokens(line) + 1
+        if current and size + t > budget:
+            parts.append("\n".join(current))
+            current, size = [], 0
+        current.append(line)
+        size += t
+    if current:
+        parts.append("\n".join(current))
+    return parts
+
+
+def _chat(cfg: dict, prompt: str) -> str:
     try:
         resp = requests.post(
             f"{cfg['ollama_url']}/api/chat",
@@ -94,7 +132,8 @@ def generate(cfg: dict, kind: str, captions: list[dict]) -> str:
                 "model": cfg["ollama_model"],
                 "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
-                "options": {"temperature": 0.2, "num_ctx": 8192},
+                "options": {"temperature": 0.2,
+                            "num_ctx": int(cfg.get("llm_num_ctx", 8192))},
             },
             timeout=600)
         resp.raise_for_status()
@@ -102,4 +141,55 @@ def generate(cfg: dict, kind: str, captions: list[dict]) -> str:
         raise RuntimeError(
             "Ollama is not reachable on 127.0.0.1:11434 — start it with "
             "`brew services start ollama`") from e
+    except requests.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.response.json().get("error", "")
+        except Exception:
+            pass
+        raise RuntimeError(f"Ollama error: {detail or e}") from e
     return resp.json()["message"]["content"].strip()
+
+
+def _condense(cfg: dict, context: str, text: str) -> str:
+    """Compress an oversized transcript into notes that fit the budget."""
+    budget = _input_budget(cfg)
+    for round_no in range(1, 4):  # 3 rounds ≈ days of audio; loop guard
+        parts = _split_lines(text.split("\n"), budget)
+        if len(parts) == 1:
+            break
+        log.info("transcript over context budget — condensing %d parts (round %d)",
+                 len(parts), round_no)
+        notes = [
+            CHUNK_PROMPT.format(context=context, part=i, parts=len(parts),
+                                transcript=part)
+            for i, part in enumerate(parts, 1)]
+        text = "\n\n".join(
+            f"--- Notes from part {i}/{len(parts)} ---\n{_chat(cfg, note)}"
+            for i, note in enumerate(notes, 1))
+    if _estimate_tokens(text) > budget:
+        log.warning("notes still exceed the context budget after condensing — "
+                    "the start of the meeting may be under-represented")
+    return text
+
+
+def generate(cfg: dict, kind: str, captions: list[dict]) -> str:
+    if kind not in PROMPTS:
+        raise ValueError(f"unknown deliverable: {kind}")
+    if not captions:
+        raise RuntimeError("no transcript captured yet")
+    ctx = (cfg.get("meeting_context") or "").strip()
+    context = f" {ctx}" if ctx else ""
+    log.info("generating %s with %s (%d captions)…", kind, cfg["ollama_model"], len(captions))
+
+    transcript = transcript_to_text(captions)
+    if _estimate_tokens(transcript) > _input_budget(cfg):
+        condensed = _condense(cfg, context, transcript)
+        transcript = ("Condensed notes from a long meeting "
+                      "(compiled chronologically):\n\n" + condensed)
+
+    prompt = PROMPTS[kind].format(
+        context=context,
+        date=time.strftime("%Y-%m-%d %H:%M"),
+        transcript=transcript)
+    return _chat(cfg, prompt)
