@@ -1,0 +1,6 @@
+faster-whisper>=1.2
+sounddevice>=0.5
+numpy>=2.0
+fastapi>=0.115
+uvicorn[standard]>=0.34
+requests>=2.32

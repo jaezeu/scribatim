@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Susurro</title>
+<style>
+  :root {
+    --bg: #0b0e14; --panel: #11151f; --panel2: #161b28; --border: #232a3b;
+    --text: #e8ecf4; --dim: #8b94a7; --faint: #5a6275;
+    --accent: #6fe3b4; --accent2: #7aa2ff; --warn: #ffb86b; --red: #ff6b7a;
+    --mono: "SF Mono", ui-monospace, Menlo, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    background: radial-gradient(1200px 600px at 70% -10%, #141c30 0%, var(--bg) 55%);
+    color: var(--text); font: 15px/1.55 -apple-system, "Segoe UI", sans-serif;
+    height: 100vh; display: flex; flex-direction: column; overflow: hidden;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px; padding: 14px 22px;
+    border-bottom: 1px solid var(--border); background: rgba(11,14,20,.7);
+    backdrop-filter: blur(10px);
+  }
+  .logo { font-weight: 700; font-size: 17px; letter-spacing: .3px; }
+  .logo span { color: var(--accent); }
+  .badge {
+    font: 11px/1 var(--mono); color: var(--accent); border: 1px solid #1e3a30;
+    background: #10201a; padding: 5px 9px; border-radius: 20px; letter-spacing: .5px;
+  }
+  .badge.blue { color: var(--accent2); border-color: #22304f; background: #131a2b; }
+  .spacer { flex: 1; }
+  #timer { font: 600 15px var(--mono); color: var(--dim); min-width: 74px; text-align: right; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); }
+  .dot.live { background: var(--red); box-shadow: 0 0 0 0 rgba(255,107,122,.5); animation: pulse 1.6s infinite; }
+  @keyframes pulse { 70% { box-shadow: 0 0 0 9px rgba(255,107,122,0); } }
+  button {
+    font: 600 13.5px inherit; color: var(--text); background: var(--panel2);
+    border: 1px solid var(--border); border-radius: 9px; padding: 9px 16px;
+    cursor: pointer; transition: .15s;
+  }
+  button:hover { border-color: #38415a; transform: translateY(-1px); }
+  button:disabled { opacity: .4; cursor: default; transform: none; }
+  button.primary { background: linear-gradient(135deg, #1d5b44, #17493d); border-color: #2c7a5c; }
+  button.danger { background: #3a1b22; border-color: #6b2833; }
+  button.accent2 { background: #1b2742; border-color: #2f4377; }
+  main { flex: 1; display: flex; min-height: 0; }
+  #feed {
+    flex: 1.6; overflow-y: auto; padding: 22px 26px; display: flex;
+    flex-direction: column; gap: 12px; scroll-behavior: smooth;
+  }
+  #empty { margin: auto; text-align: center; color: var(--faint); }
+  #empty .big { font-size: 42px; margin-bottom: 10px; }
+  .cap {
+    max-width: 78%; padding: 12px 16px; border-radius: 14px; background: var(--panel);
+    border: 1px solid var(--border); animation: rise .25s ease;
+    overflow-wrap: anywhere; /* CJK/Thai text has no spaces to break on */
+  }
+  @keyframes rise { from { opacity: 0; transform: translateY(8px); } }
+  .cap.mic { align-self: flex-end; background: #12202b; border-color: #1e3648; }
+  .cap .meta {
+    display: flex; gap: 8px; align-items: center; font: 11px var(--mono);
+    color: var(--faint); margin-bottom: 5px;
+  }
+  .cap .who { color: var(--accent2); font-weight: 700; }
+  .cap.mic .who { color: var(--accent); }
+  .lang {
+    background: #2a2338; color: #c9a6ff; border-radius: 4px; padding: 1px 6px;
+    font-weight: 700; letter-spacing: .5px;
+  }
+  .cap .orig { color: var(--dim); font-size: 13.5px; margin-top: 6px; padding-top: 6px;
+    border-top: 1px dashed var(--border); font-style: italic; }
+  /* no real italics in CJK/Thai fonts — synthesized slanting hurts legibility */
+  .cap .orig:is(:lang(zh), :lang(yue), :lang(ja), :lang(ko), :lang(th), :lang(lo), :lang(my), :lang(km)) { font-style: normal; }
+  aside {
+    flex: 1; min-width: 340px; max-width: 460px; border-left: 1px solid var(--border);
+    display: flex; flex-direction: column; background: rgba(13,17,26,.6);
+  }
+  aside h2 {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 1.5px;
+    color: var(--faint); padding: 16px 20px 10px;
+  }
+  .meters { padding: 0 20px 14px; display: grid; gap: 10px; }
+  .meter { display: grid; grid-template-columns: 92px 1fr; gap: 10px; align-items: center;
+    font: 12px var(--mono); color: var(--dim); }
+  .bar { height: 6px; border-radius: 3px; background: var(--panel2); overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; border-radius: 3px;
+    background: linear-gradient(90deg, var(--accent), var(--accent2));
+    transition: width .18s ease-out; }
+  #minutes {
+    flex: 1; overflow-y: auto; margin: 0 20px 16px; padding: 16px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    font-size: 14px; color: var(--dim);
+  }
+  #minutes h1 { font-size: 17px; color: var(--text); margin-bottom: 10px; }
+  #minutes h2 { font-size: 13px; color: var(--accent); padding: 14px 0 6px; letter-spacing: 1px; }
+  #minutes ul { padding-left: 20px; } #minutes li { margin: 3px 0; }
+  #minutes table { border-collapse: collapse; width: 100%; margin: 6px 0; font-size: 13px; }
+  #minutes th, #minutes td { border: 1px solid var(--border); padding: 5px 8px; text-align: left; }
+  #minutes th { color: var(--text); background: var(--panel2); }
+  #minutes .hint { color: var(--faint); font-style: italic; }
+  .sidebtns { display: flex; gap: 10px; padding: 0 20px 20px; }
+  .sidebtns button { flex: 1; }
+  #toast {
+    position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+    background: #26202f; border: 1px solid #4a3a5f; color: var(--text);
+    padding: 10px 18px; border-radius: 10px; font-size: 13.5px; display: none;
+  }
+  ::-webkit-scrollbar { width: 9px; } ::-webkit-scrollbar-thumb { background: #222a3c; border-radius: 5px; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">susu<span>rro</span></div>
+  <div class="badge">100% LOCAL · NO CLOUD</div>
+  <div class="badge blue" id="modelBadge">whisper</div>
+  <div class="spacer"></div>
+  <div class="dot" id="dot"></div>
+  <div id="timer">00:00</div>
+  <button class="primary" id="btnStart">▶ Start</button>
+  <button class="danger" id="btnStop" disabled>■ Stop</button>
+</header>
+<main>
+  <section id="feed">
+    <div id="empty">
+      <div class="big">🎧</div>
+      <div>Press <b>Start</b> before your meeting.<br>
+      Captions appear here — participants translated to English in real time.</div>
+    </div>
+  </section>
+  <aside>
+    <h2>Audio</h2>
+    <div class="meters">
+      <div class="meter"><span>Participants</span><div class="bar"><i id="lvl-system"></i></div></div>
+      <div class="meter"><span>You (mic)</span><div class="bar"><i id="lvl-mic"></i></div></div>
+    </div>
+    <h2>Deliverables</h2>
+    <div id="minutes"><span class="hint">A local LLM (Ollama) writes these —
+      nothing leaves this Mac. <b>Recap</b> works mid-meeting; after the call,
+      generate <b>Minutes</b> or a follow-up <b>Email</b> draft.
+      Everything is saved to ~/Documents/Susurro.</span></div>
+    <div class="sidebtns">
+      <button class="accent2" id="btnSummary" title="Quick recap — usable mid-meeting">⚡ Recap</button>
+      <button class="accent2" id="btnMinutes" title="Full minutes with action items">✦ Minutes</button>
+      <button class="accent2" id="btnEmail" title="Follow-up email draft">✉ Email</button>
+      <button id="btnCopy" disabled>Copy</button>
+    </div>
+  </aside>
+</main>
+<div id="toast"></div>
+<script>
+const $ = id => document.getElementById(id);
+let startedAt = null, minutesMd = null, levelDecay = {};
+
+function toast(msg, ms = 3500) {
+  $("toast").textContent = msg; $("toast").style.display = "block";
+  clearTimeout(toast._t); toast._t = setTimeout(() => $("toast").style.display = "none", ms);
+}
+
+function setRunning(running, ts) {
+  startedAt = running ? (ts || Date.now() / 1000) : null;
+  $("dot").className = "dot" + (running ? " live" : "");
+  $("btnStart").disabled = running; $("btnStop").disabled = !running;
+}
+
+setInterval(() => {
+  if (!startedAt) return;
+  const s = Math.max(0, Math.floor(Date.now() / 1000 - startedAt));
+  $("timer").textContent = String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+}, 1000);
+
+function addCaption(c) {
+  $("empty") && $("empty").remove();
+  const el = document.createElement("div");
+  el.className = "cap " + (c.source === "mic" ? "mic" : "sys");
+  const who = c.source === "mic" ? "You" : "Participant";
+  const t = new Date(c.time * 1000).toLocaleTimeString([], {hour:"2-digit", minute:"2-digit", second:"2-digit"});
+  let langBadge = c.lang !== "en" ? `<span class="lang">${c.lang.toUpperCase()} → EN</span>` : "";
+  // lang attribute → browser picks the right font/glyphs (e.g. Japanese vs
+  // Chinese Han variants) and correct line-breaking for Thai etc.
+  el.innerHTML = `<div class="meta"><span class="who">${who}</span><span>${t}</span>${langBadge}</div>
+    <div>${esc(c.text_en)}</div>` +
+    (c.text_orig ? `<div class="orig" lang="${esc(c.lang)}">${esc(c.text_orig)}</div>` : "");
+  $("feed").appendChild(el);
+  $("feed").scrollTop = $("feed").scrollHeight;
+}
+
+function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+
+function setLevel(source, rms) {
+  const el = $("lvl-" + source); if (!el) return;
+  const pct = Math.min(100, Math.round(Math.sqrt(rms) * 180));
+  levelDecay[source] = Date.now();
+  el.style.width = pct + "%";
+  setTimeout(() => { if (Date.now() - levelDecay[source] >= 480) el.style.width = "0%"; }, 500);
+}
+
+// Tiny markdown renderer (headings, bullets, tables, bold)
+function md(src) {
+  const lines = src.split("\n"); let html = "", inUl = false, inTable = false;
+  const inline = s => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
+  for (const line of lines) {
+    if (/^\s*\|/.test(line)) {
+      if (/^\s*\|[\s\-:|]+\|\s*$/.test(line)) continue;
+      const cells = line.trim().replace(/^\||\|$/g, "").split("|").map(c => inline(c.trim()));
+      if (!inTable) { html += "<table><tr>" + cells.map(c => `<th>${c}</th>`).join("") + "</tr>"; inTable = true; }
+      else html += "<tr>" + cells.map(c => `<td>${c}</td>`).join("") + "</tr>";
+      continue;
+    } else if (inTable) { html += "</table>"; inTable = false; }
+    if (/^\s*[-*] /.test(line)) {
+      if (!inUl) { html += "<ul>"; inUl = true; }
+      html += `<li>${inline(line.replace(/^\s*[-*] /, ""))}</li>`; continue;
+    } else if (inUl) { html += "</ul>"; inUl = false; }
+    if (/^### /.test(line)) html += `<h2>${inline(line.slice(4))}</h2>`;
+    else if (/^## /.test(line)) html += `<h2>${inline(line.slice(3))}</h2>`;
+    else if (/^# /.test(line)) html += `<h1>${inline(line.slice(2))}</h1>`;
+    else if (line.trim()) html += `<p>${inline(line)}</p>`;
+  }
+  if (inUl) html += "</ul>"; if (inTable) html += "</table>";
+  return html;
+}
+
+async function api(path, opts) {
+  const r = await fetch(path, Object.assign({method: "POST"}, opts));
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || (j.errors || []).join("; ") || r.statusText);
+  return j;
+}
+
+$("btnStart").onclick = async () => {
+  $("btnStart").disabled = true;
+  try {
+    const r = await api("/api/start");
+    if (r.errors && r.errors.length) toast("Started with warnings: " + r.errors.join("; "), 6000);
+  } catch (e) { toast("Start failed: " + e.message, 8000); $("btnStart").disabled = false; }
+};
+$("btnStop").onclick = () => api("/api/stop").catch(e => toast(e.message));
+
+const GEN = {btnSummary: ["summary", "recap"], btnMinutes: ["minutes", "minutes"], btnEmail: ["email", "email draft"]};
+for (const [btn, [kind, label]] of Object.entries(GEN)) {
+  $(btn).onclick = async () => {
+    for (const b of Object.keys(GEN)) $(b).disabled = true;
+    $("minutes").innerHTML = `<span class="hint">The local LLM is writing your ${label}… (20–90s)</span>`;
+    try {
+      const r = await api("/api/generate/" + kind);
+      minutesMd = r.markdown;
+      $("minutes").innerHTML = md(r.markdown);
+      $("btnCopy").disabled = false;
+      if (r.saved_to) toast(`Saved ${kind}.md to ` + r.saved_to, 6000);
+    } catch (e) { $("minutes").innerHTML = `<span class="hint">${esc(e.message)}</span>`; }
+    for (const b of Object.keys(GEN)) $(b).disabled = false;
+  };
+}
+$("btnCopy").onclick = () => { navigator.clipboard.writeText(minutesMd || ""); toast("Copied as Markdown"); };
+
+function connect() {
+  const es = new EventSource("/api/events");
+  es.onmessage = ev => {
+    const e = JSON.parse(ev.data);
+    if (e.type === "snapshot") {
+      $("modelBadge").textContent = "whisper:" + e.model + " · " + e.ollama_model;
+      setRunning(e.running, e.started_at);
+      for (const c of e.captions) addCaption(c);
+    } else if (e.type === "caption") addCaption(e);
+    else if (e.type === "level") setLevel(e.source, e.rms);
+    else if (e.type === "status") setRunning(e.running, e.started_at);
+  };
+  es.onerror = () => { es.close(); setTimeout(connect, 2000); };
+}
+connect();
+</script>
+</body>
+</html>

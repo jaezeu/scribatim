@@ -1,0 +1,16 @@
+# build artifacts
+bin/
+*.o
+
+# python
+.venv/
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# local audio/debug dumps (never commit audio)
+*.raw
+*.wav
+*.log
