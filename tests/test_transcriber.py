@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from susurro.transcriber import HALLUCINATION_RMS, is_hallucination
+from scribatim.transcriber import HALLUCINATION_RMS, is_hallucination
 
 
 def tone(rms):

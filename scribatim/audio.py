@@ -12,12 +12,12 @@ from pathlib import Path
 
 import numpy as np
 
-log = logging.getLogger("susurro.audio")
+log = logging.getLogger("scribatim.audio")
 
 TARGET_RATE = 16000
 BIN_DIR = Path(__file__).resolve().parent.parent / "bin"
-TAP_BINARY = BIN_DIR / "susurro-tap"
-MIC_BINARY = BIN_DIR / "susurro-mic"
+TAP_BINARY = BIN_DIR / "scribatim-tap"
+MIC_BINARY = BIN_DIR / "scribatim-mic"
 
 
 def to_16k(samples: np.ndarray, rate: int) -> np.ndarray:

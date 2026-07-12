@@ -1,5 +1,5 @@
 #!/bin/zsh
-# One-time setup for Susurro (macOS, Apple Silicon or Intel).
+# One-time setup for Scribatim (macOS, Apple Silicon or Intel).
 # Everything installed runs locally; the only network use is downloading
 # the models once (Whisper + the Ollama minutes model).
 set -e
@@ -8,7 +8,7 @@ cd "$(dirname "$0")"
 fail() { echo "\n✗ $1" >&2; exit 1; }
 
 echo "==> Checking prerequisites…"
-[[ "$(uname)" == "Darwin" ]] || fail "Susurro is macOS-only (needs Core Audio process taps)."
+[[ "$(uname)" == "Darwin" ]] || fail "Scribatim is macOS-only (needs Core Audio process taps)."
 sw_vers -productVersion | awk -F. '{ exit !($1 > 14 || ($1 == 14 && $2 >= 4)) }' \
   || fail "macOS 14.4+ required for system-audio taps (you have $(sw_vers -productVersion))."
 command -v swiftc >/dev/null \
@@ -21,15 +21,15 @@ echo "    all good"
 
 echo "==> Compiling system-audio tap (Swift)…"
 mkdir -p bin
-swiftc -O capture/systemaudio.swift -o bin/susurro-tap \
+swiftc -O capture/systemaudio.swift -o bin/scribatim-tap \
   -framework CoreAudio -framework AudioToolbox
 
 echo "==> Compiling echo-cancelled mic helper (Swift)…"
-swiftc -O capture/micaec.swift -o bin/susurro-mic \
+swiftc -O capture/micaec.swift -o bin/scribatim-mic \
   -framework AVFoundation
 
 echo "==> Compiling speaker-OCR helper (Swift)…"
-swiftc -O capture/speakerocr.swift -o bin/susurro-speaker \
+swiftc -O capture/speakerocr.swift -o bin/scribatim-speaker \
   -framework ScreenCaptureKit -framework Vision -framework CoreMedia
 
 echo "==> Python environment…"
@@ -41,8 +41,8 @@ echo "==> Downloading Whisper model (one-time)…"
 .venv/bin/python - <<'PY'
 import logging
 logging.basicConfig(level=logging.INFO, format="    %(message)s")
-from susurro.config import load_config
-from susurro.transcriber import Transcriber
+from scribatim.config import load_config
+from scribatim.transcriber import Transcriber
 # loads (and downloads on first run) whichever backend this Mac will use:
 # MLX on Apple Silicon, CTranslate2/CPU otherwise
 Transcriber(load_config(), lambda e: None).load()

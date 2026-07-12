@@ -1,4 +1,4 @@
-// Susurro system-audio tap.
+// Scribatim system-audio tap.
 // Captures the Mac's system audio output (any app: Teams, Zoom, Meet, browser)
 // via a Core Audio process tap (macOS 14.4+), mixes it to mono float32 at the
 // device's native sample rate, and streams it to stdout:
@@ -49,7 +49,7 @@ func defaultOutputDeviceUID() -> String {
 // MARK: - Create the process tap (global: every app's output)
 
 let tapDescription = CATapDescription(stereoGlobalTapButExcludeProcesses: [])
-tapDescription.name = "SusurroTap"
+tapDescription.name = "ScribatimTap"
 tapDescription.isPrivate = true
 tapDescription.muteBehavior = .unmuted  // never alter what the user hears
 
@@ -81,8 +81,8 @@ log("tap created: \(sampleRate) Hz, \(tapChannels) ch")
 
 let outputUID = defaultOutputDeviceUID()
 let aggregateDescription: [String: Any] = [
-    kAudioAggregateDeviceNameKey: "Susurro Aggregate",
-    kAudioAggregateDeviceUIDKey: "com.susurro.aggregate." + UUID().uuidString,
+    kAudioAggregateDeviceNameKey: "Scribatim Aggregate",
+    kAudioAggregateDeviceUIDKey: "com.scribatim.aggregate." + UUID().uuidString,
     kAudioAggregateDeviceMainSubDeviceKey: outputUID,
     kAudioAggregateDeviceIsPrivateKey: true,
     kAudioAggregateDeviceIsStackedKey: false,

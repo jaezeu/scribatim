@@ -1,4 +1,4 @@
-// Susurro microphone capture with Apple voice processing.
+// Scribatim microphone capture with Apple voice processing.
 // Captures the default microphone through the system's voice-processing unit
 // (the FaceTime engine): echo cancellation — anything the Mac is playing is
 // subtracted from the mic signal — plus noise suppression and automatic gain.
