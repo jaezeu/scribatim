@@ -18,12 +18,12 @@ import time
 
 import requests
 
-log = logging.getLogger("susurro.minutes")
+log = logging.getLogger("scribatim.minutes")
 
 _CONTEXT = """You are an expert meeting assistant.{context} \
 Below is a meeting transcript. Lines are labeled "You" (the person running \
 this tool); other speakers appear by name when known, otherwise as \
-"Participants". Non-English speech has been translated to English. \
+"Participants".{attendees} Non-English speech has been translated to English. \
 Be faithful to the transcript — never invent facts, names, or dates. \
 Transcription may contain small errors; smooth over obvious ones.
 """
@@ -151,7 +151,7 @@ def _chat(cfg: dict, prompt: str) -> str:
     return resp.json()["message"]["content"].strip()
 
 
-def _condense(cfg: dict, context: str, text: str) -> str:
+def _condense(cfg: dict, context: str, attendees: str, text: str) -> str:
     """Compress an oversized transcript into notes that fit the budget."""
     budget = _input_budget(cfg)
     for round_no in range(1, 4):  # 3 rounds ≈ days of audio; loop guard
@@ -161,8 +161,8 @@ def _condense(cfg: dict, context: str, text: str) -> str:
         log.info("transcript over context budget — condensing %d parts (round %d)",
                  len(parts), round_no)
         notes = [
-            CHUNK_PROMPT.format(context=context, part=i, parts=len(parts),
-                                transcript=part)
+            CHUNK_PROMPT.format(context=context, attendees=attendees,
+                                part=i, parts=len(parts), transcript=part)
             for i, part in enumerate(parts, 1)]
         text = "\n\n".join(
             f"--- Notes from part {i}/{len(parts)} ---\n{_chat(cfg, note)}"
@@ -173,23 +173,31 @@ def _condense(cfg: dict, context: str, text: str) -> str:
     return text
 
 
-def generate(cfg: dict, kind: str, captions: list[dict]) -> str:
+def generate(cfg: dict, kind: str, captions: list[dict],
+             attendees: list[str] | None = None) -> str:
     if kind not in PROMPTS:
         raise ValueError(f"unknown deliverable: {kind}")
     if not captions:
         raise RuntimeError("no transcript captured yet")
     ctx = (cfg.get("meeting_context") or "").strip()
     context = f" {ctx}" if ctx else ""
+    # names read off the meeting window (speaker OCR): even when individual
+    # captions aren't attributed, the model can name owners and attendees
+    attendees_line = (
+        f' Attendees seen in the meeting window: {", ".join(attendees)}. '
+        'Attribute statements to them only when the transcript makes it clear '
+        'who is speaking.') if attendees else ""
     log.info("generating %s with %s (%d captions)…", kind, cfg["ollama_model"], len(captions))
 
     transcript = transcript_to_text(captions)
     if _estimate_tokens(transcript) > _input_budget(cfg):
-        condensed = _condense(cfg, context, transcript)
+        condensed = _condense(cfg, context, attendees_line, transcript)
         transcript = ("Condensed notes from a long meeting "
                       "(compiled chronologically):\n\n" + condensed)
 
     prompt = PROMPTS[kind].format(
         context=context,
+        attendees=attendees_line,
         date=time.strftime("%Y-%m-%d %H:%M"),
         transcript=transcript)
     return _chat(cfg, prompt)

@@ -1,10 +1,10 @@
 """Smoke tests for the transcript formatting and map-reduce chunking in
-susurro.minutes — the pure-logic pieces that would regress silently."""
+scribatim.minutes — the pure-logic pieces that would regress silently."""
 
 import unittest
 from unittest import mock
 
-from susurro import minutes
+from scribatim import minutes
 
 
 def caption(text="hello", source="system", speaker=None, lang="en", t=1751844000.0):
