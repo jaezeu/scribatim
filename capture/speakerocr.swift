@@ -1,15 +1,21 @@
-// Susurro active-speaker OCR helper (experimental).
+// Scribatim active-speaker OCR helper (experimental).
 // Finds the Zoom / Microsoft Teams meeting window, captures it ~once per
 // second with ScreenCaptureKit, and runs Apple's on-device Vision OCR on each
 // frame. Emits one JSON line per frame to stdout:
 //
 //   {"time": 1720000000.0, "texts": [{"text": "Alice Chen", "x": 0.02,
-//    "y": 0.06, "w": 0.1, "h": 0.03, "conf": 0.98}, ...]}
+//    "y": 0.06, "w": 0.1, "h": 0.03, "conf": 0.98,
+//    "gl": [0.31, 0.28, 258, 251]}, ...]}
 //
 // Coordinates are normalized to the window, origin bottom-left (Vision's
-// convention). Deciding which text is the speaker's name is the Python
-// side's job — keeping this helper dumb means heuristics can evolve without
-// recompiling.
+// convention). "gl" (present when non-trivial) samples the pixels in thin
+// bands just left of and just below the text box — where Zoom/Teams draw
+// the colored outline around the actively speaking tile, since name labels
+// sit at a tile's bottom-left. It is [left_frac, bottom_frac, left_hue,
+// bottom_hue]: the fraction of vividly colored pixels in each band and
+// their mean hue in degrees. Purely mechanical: deciding which text is the
+// speaker's name is the Python side's job — keeping this helper dumb means
+// heuristics can evolve without recompiling.
 //
 // Requires the Screen Recording privacy permission (macOS prompts on first
 // run). Frames are OCR'd in memory and discarded; nothing is written to disk
@@ -68,7 +74,7 @@ func findMeetingWindow(_ content: SCShareableContent) -> SCWindow? {
 
 final class Capture: NSObject, SCStreamOutput, SCStreamDelegate {
     private var stream: SCStream?
-    private let ocrQueue = DispatchQueue(label: "susurro.speaker.ocr")
+    private let ocrQueue = DispatchQueue(label: "scribatim.speaker.ocr")
     private var announced = false
 
     func scan() {
@@ -107,6 +113,7 @@ final class Capture: NSObject, SCStreamOutput, SCStreamDelegate {
         config.minimumFrameInterval = CMTime(value: 1, timescale: 1)  // ≤1 fps
         config.queueDepth = 3
         config.showsCursor = false
+        config.pixelFormat = kCVPixelFormatType_32BGRA  // glow sampling reads BGRA
 
         let s = SCStream(filter: filter, configuration: config, delegate: self)
         do {
@@ -140,6 +147,73 @@ final class Capture: NSObject, SCStreamOutput, SCStreamDelegate {
         ocr(pixelBuffer)
     }
 
+    // Fraction of vividly colored pixels in a pixel rectangle, and their mean
+    // hue (degrees). Vivid = bright and saturated, like the accent-colored
+    // outline meeting apps draw around the speaking tile — video content and
+    // dark chrome mostly isn't.
+    private func vividness(_ base: UnsafePointer<UInt8>, bytesPerRow: Int,
+                           width: Int, height: Int,
+                           x0: Int, x1: Int, y0: Int, y1: Int) -> (Double, Double)? {
+        var total = 0, vivid = 0
+        var sinSum = 0.0, cosSum = 0.0
+        var y = max(0, y0)
+        while y < min(height, y1) {
+            var x = max(0, x0)
+            while x < min(width, x1) {
+                let p = base + y * bytesPerRow + x * 4  // BGRA
+                let b = Double(p[0]) / 255, g = Double(p[1]) / 255, r = Double(p[2]) / 255
+                let mx = max(r, max(g, b)), mn = min(r, min(g, b))
+                total += 1
+                if mx > 0.35, mx - mn > 0.45 * mx {
+                    vivid += 1
+                    let d = mx - mn
+                    var hue: Double
+                    if mx == r { hue = (g - b) / d }
+                    else if mx == g { hue = (b - r) / d + 2 }
+                    else { hue = (r - g) / d + 4 }
+                    hue *= 60
+                    if hue < 0 { hue += 360 }
+                    sinSum += sin(hue * .pi / 180)
+                    cosSum += cos(hue * .pi / 180)
+                }
+                x += 2
+            }
+            y += 2
+        }
+        guard total > 0 else { return nil }
+        var hue = 0.0
+        if vivid > 0 {
+            hue = atan2(sinSum, cosSum) * 180 / .pi
+            if hue < 0 { hue += 360 }
+        }
+        return (Double(vivid) / Double(total), hue)
+    }
+
+    // Sample the bands left of and below a text box (in Vision's normalized,
+    // bottom-left-origin coordinates) and return the "gl" payload, or nil
+    // when there is no meaningful color there.
+    private func glow(_ pixelBuffer: CVPixelBuffer, box: CGRect,
+                      width: Int, height: Int, bytesPerRow: Int,
+                      base: UnsafePointer<UInt8>) -> [Double]? {
+        // labels are one short line; skip paragraphs of shared content
+        guard box.height < 0.06, box.width < 0.35 else { return nil }
+        let x0 = Int(box.minX * Double(width))
+        let x1 = Int(box.maxX * Double(width))
+        let yTop = Int((1 - box.maxY) * Double(height))
+        let yBottom = Int((1 - box.minY) * Double(height))
+        guard let left = vividness(base, bytesPerRow: bytesPerRow, width: width,
+                                   height: height, x0: x0 - 26, x1: x0 - 4,
+                                   y0: yTop, y1: yBottom),
+              let bottom = vividness(base, bytesPerRow: bytesPerRow, width: width,
+                                     height: height, x0: x0, x1: x1,
+                                     y0: yBottom + 3, y1: yBottom + 16)
+        else { return nil }
+        guard left.0 > 0.03, bottom.0 > 0.03 else { return nil }
+        return [(left.0 * 1000).rounded() / 1000,
+                (bottom.0 * 1000).rounded() / 1000,
+                left.1.rounded(), bottom.1.rounded()]
+    }
+
     private func ocr(_ pixelBuffer: CVPixelBuffer) {
         let request = VNRecognizeTextRequest()
         request.recognitionLevel = .accurate  // .fast is Latin-only; names can be CJK
@@ -149,18 +223,41 @@ final class Capture: NSObject, SCStreamOutput, SCStreamDelegate {
         let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, options: [:])
         do { try handler.perform([request]) } catch { return }
 
+        var pixelBase: UnsafePointer<UInt8>? = nil
+        var pxWidth = 0, pxHeight = 0, pxBytesPerRow = 0
+        var locked = false
+        if CVPixelBufferGetPixelFormatType(pixelBuffer) == kCVPixelFormatType_32BGRA,
+           CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly) == kCVReturnSuccess {
+            locked = true
+            if let raw = CVPixelBufferGetBaseAddress(pixelBuffer) {
+                pixelBase = UnsafePointer(raw.assumingMemoryBound(to: UInt8.self))
+                pxWidth = CVPixelBufferGetWidth(pixelBuffer)
+                pxHeight = CVPixelBufferGetHeight(pixelBuffer)
+                pxBytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+            }
+        }
+        defer {
+            if locked { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
+        }
+
         var texts: [[String: Any]] = []
         for observation in request.results ?? [] {
             guard let candidate = observation.topCandidates(1).first else { continue }
             let box = observation.boundingBox
-            texts.append([
+            var item: [String: Any] = [
                 "text": candidate.string,
                 "x": (box.minX * 1000).rounded() / 1000,
                 "y": (box.minY * 1000).rounded() / 1000,
                 "w": (box.width * 1000).rounded() / 1000,
                 "h": (box.height * 1000).rounded() / 1000,
                 "conf": (Double(candidate.confidence) * 100).rounded() / 100,
-            ])
+            ]
+            if let base = pixelBase,
+               let gl = glow(pixelBuffer, box: box, width: pxWidth, height: pxHeight,
+                             bytesPerRow: pxBytesPerRow, base: base) {
+                item["gl"] = gl
+            }
+            texts.append(item)
         }
         let payload: [String: Any] = ["time": Date().timeIntervalSince1970, "texts": texts]
         guard var data = try? JSONSerialization.data(withJSONObject: payload) else { return }
