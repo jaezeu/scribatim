@@ -1,10 +1,10 @@
-"""Susurro server: orchestrates capture → whisper → live dashboard → minutes.
+"""Scribatim server: orchestrates capture → whisper → live dashboard → minutes.
 
 Security posture:
   * binds 127.0.0.1 only — unreachable from the network
   * every request must carry a per-launch random token (URL once, then cookie)
   * no external calls at runtime; audio is never written to disk
-  * transcripts/minutes saved locally under ~/Documents/Susurro (0700)
+  * transcripts/minutes saved locally under ~/Documents/Scribatim (0700)
 """
 
 import asyncio
@@ -25,7 +25,7 @@ from .minutes import PROMPTS, generate, transcript_to_text
 from .speaker import SpeakerTracker
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-log = logging.getLogger("susurro")
+log = logging.getLogger("scribatim")
 
 cfg = load_config()
 TOKEN = secrets.token_urlsafe(16)
@@ -70,6 +70,7 @@ class State:
         self.session_dir: Path | None = None
         self.speaker: SpeakerTracker | None = None
         self.speaker_enabled: bool = False
+        self.roster: list[str] = []  # attendee names read off the meeting window
 
 
 state = State()
@@ -77,17 +78,24 @@ state.speaker_enabled = bool(cfg["speaker_ocr"])
 
 
 def broadcast(event: dict):
+    events = [event]
     # experimental speaker OCR: label system-audio captions with the name
     # shown on the meeting window while that segment was being spoken
-    if event["type"] == "caption" and event["source"] == "system" and state.speaker:
-        event["speaker"] = state.speaker.name_for(
-            event["time"] - event["duration"], event["time"])
+    if event["type"] == "caption" and state.speaker:
+        if event["source"] == "system":
+            event["speaker"] = state.speaker.name_for(
+                event["time"] - event["duration"], event["time"])
+        roster = state.speaker.roster()
+        if roster != state.roster:
+            state.roster = roster
+            events.append({"type": "roster", "attendees": roster})
     if event["type"] == "caption":
         with state.lock:
             state.captions.append(event)
     if state.loop:
         for q in list(state.subscribers):
-            state.loop.call_soon_threadsafe(q.put_nowait, event)
+            for e in events:
+                state.loop.call_soon_threadsafe(q.put_nowait, e)
 
 
 def _start_speaker_tracker() -> str | None:
@@ -115,7 +123,7 @@ async def auth(request: Request, call_next):
     # DNS-rebinding defense: only accept the loopback hostnames we serve on
     if request.headers.get("host", "") not in ALLOWED_HOSTS:
         return JSONResponse({"error": "bad host"}, status_code=403)
-    supplied = request.query_params.get("t") or request.cookies.get("susurro_token")
+    supplied = request.query_params.get("t") or request.cookies.get("scribatim_token")
     if not (supplied and secrets.compare_digest(supplied, TOKEN)):
         return JSONResponse({"error": "missing or bad token"}, status_code=403)
     response = await call_next(request)
@@ -126,7 +134,7 @@ async def auth(request: Request, call_next):
         "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
         "connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'")
     if request.query_params.get("t"):
-        response.set_cookie("susurro_token", TOKEN, httponly=True, samesite="strict")
+        response.set_cookie("scribatim_token", TOKEN, httponly=True, samesite="strict")
     return response
 
 
@@ -158,6 +166,7 @@ async def start():
         state.captions = []
         state.deliverables = {}
         state.session_dir = None
+        state.roster = []
 
     def on_segment(source, audio):
         state.transcriber.submit(source, audio)
@@ -209,14 +218,22 @@ async def stop():
             return {"ok": True, "already": True}
         state.running = False
         sources, state.sources = state.sources, []
+    broadcast({"type": "status", "running": False, "started_at": None, "errors": []})
     for src in sources:
         try:
             await asyncio.to_thread(src.stop)
         except Exception:
             log.exception("source stop failed")
+    # stopping the sources flushed their final segments into the transcriber
+    # queue — wait for those captions before saving, or the transcript on
+    # disk silently loses the end of the meeting
+    if state.transcriber and not await asyncio.to_thread(state.transcriber.drain, 60):
+        log.warning("transcription queue did not drain in 60s — "
+                    "the saved transcript may be missing the last utterances")
+    if state.speaker:  # keep the attendee list past the tracker's lifetime
+        state.roster = state.speaker.roster()
     await asyncio.to_thread(_stop_speaker_tracker)
     _save_session()
-    broadcast({"type": "status", "running": False, "started_at": None, "errors": []})
     return {"ok": True, "captions": len(state.captions)}
 
 
@@ -273,8 +290,10 @@ async def generate_deliverable(kind: str, model: str | None = None):
         gen_cfg = dict(cfg, ollama_model=model)
     with state.lock:
         captions = list(state.captions)
+    if state.speaker:  # roster may have grown since the last caption
+        state.roster = state.speaker.roster()
     try:
-        md = await asyncio.to_thread(generate, gen_cfg, kind, captions)
+        md = await asyncio.to_thread(generate, gen_cfg, kind, captions, state.roster)
     except RuntimeError as e:
         return JSONResponse({"ok": False, "error": str(e)}, status_code=503)
     with state.lock:
@@ -296,10 +315,13 @@ async def events(request: Request):
                     "type": "snapshot",
                     "running": state.running,
                     "started_at": state.started_at,
-                    "captions": state.captions[-200:],
+                    # the full meeting, not a tail: the dashboard rebuilds its
+                    # feed and copyable transcript from this on (re)connect
+                    "captions": list(state.captions),
                     "model": cfg["whisper_model"],
                     "ollama_model": cfg["ollama_model"],
                     "speaker_enabled": state.speaker_enabled,
+                    "attendees": state.roster,
                 }
             yield f"data: {json.dumps(snapshot)}\n\n"
             while True:
@@ -340,6 +362,7 @@ def _save_session() -> Path | None:
         (session_dir / f"{kind}.md").write_text(md + "\n")
     (session_dir / "meta.json").write_text(json.dumps({
         "started_at": started, "captions": len(captions),
+        "attendees": state.roster,
         "whisper_model": cfg["whisper_model"], "ollama_model": cfg["ollama_model"],
     }, indent=2))
     log.info("session saved to %s", session_dir)
@@ -348,7 +371,7 @@ def _save_session() -> Path | None:
 
 def main():
     import uvicorn
-    print(f"\n  Susurro → http://127.0.0.1:{cfg['port']}/?t={TOKEN}\n", flush=True)
+    print(f"\n  Scribatim → http://127.0.0.1:{cfg['port']}/?t={TOKEN}\n", flush=True)
     uvicorn.run(app, host="127.0.0.1", port=cfg["port"], log_level="warning")
 
 

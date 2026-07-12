@@ -18,7 +18,7 @@ import time
 
 import numpy as np
 
-log = logging.getLogger("susurro.stt")
+log = logging.getLogger("scribatim.stt")
 
 # Scripts written without spaces between words (Chinese, Cantonese, Japanese,
 # Thai, Lao, Burmese, Khmer): joining Whisper segments with " " would inject
@@ -119,6 +119,20 @@ class Transcriber:
         self._stop.set()
         self.q.put(None)
 
+    def drain(self, timeout: float = 60.0) -> bool:
+        """Block until every queued segment has been transcribed (captions
+        keep emitting meanwhile). The last utterances of a meeting are still
+        in this queue when capture stops — the saved transcript must wait
+        for them. Returns False if the timeout expired first."""
+        deadline = time.time() + timeout
+        with self.q.all_tasks_done:
+            while self.q.unfinished_tasks:
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    return False
+                self.q.all_tasks_done.wait(remaining)
+        return True
+
     def submit(self, source: str, audio: np.ndarray):
         try:
             self.q.put_nowait((source, audio, time.time()))
@@ -180,6 +194,7 @@ class Transcriber:
         while not self._stop.is_set():
             item = self.q.get()
             if item is None:
+                self.q.task_done()
                 break
             source, audio, t_captured = item
             try:
@@ -214,3 +229,5 @@ class Transcriber:
                 self.emit(event)
             except Exception:
                 log.exception("transcription failed")
+            finally:
+                self.q.task_done()
