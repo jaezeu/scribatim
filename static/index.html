@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Susurro</title>
+<title>Scribatim</title>
 <style>
   :root {
     --bg: #07090f;
@@ -196,6 +196,21 @@
     transition: width .18s ease-out;
   }
 
+  #attendees {
+    display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 20px 14px;
+  }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    font: 600 11.5px var(--mono); color: var(--dim);
+    border: 1px solid var(--border); background: var(--panel);
+    border-radius: 99px; padding: 4px 10px 4px 5px;
+  }
+  .chip i {
+    width: 16px; height: 16px; border-radius: 50%; flex: none; font-style: normal;
+    display: grid; place-items: center; font: 700 9px var(--mono);
+    color: #10121a; text-transform: uppercase;
+  }
+
   .doctabs { display: flex; gap: 6px; padding: 0 20px 8px; }
   .doctabs button { padding: 5px 13px; font-size: 12px; }
   .doctabs button.on {
@@ -221,7 +236,7 @@
     color: var(--amber); padding: 16px 0 6px;
   }
   #minutes p { margin: 4px 0; }
-  #minutes ul { padding-left: 20px; } #minutes li { margin: 4px 0; }
+  #minutes ul, #minutes ol { padding-left: 20px; } #minutes li { margin: 4px 0; }
   #minutes li::marker { color: var(--amber); }
   #minutes table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 13px; }
   #minutes th, #minutes td { border: 1px solid var(--border); padding: 6px 9px; text-align: left; }
@@ -280,7 +295,7 @@
         <path d="M22 10.5v3" stroke="#f2b25c" stroke-width="2" stroke-linecap="round" opacity=".6"/>
       </svg>
     </span>
-    <span class="name">susurro</span>
+    <span class="name">scribatim</span>
   </div>
   <div class="badge"><b>●</b>&nbsp; 100% local · no cloud</div>
   <div class="badge blue" id="modelBadge">whisper</div>
@@ -309,12 +324,16 @@
       <div class="meter"><span>Participants</span><div class="bar"><i id="lvl-system"></i></div></div>
       <div class="meter"><span>You (mic)</span><div class="bar"><i id="lvl-mic"></i></div></div>
     </div>
+    <div id="attendeesWrap" hidden>
+      <h2>Attendees</h2>
+      <div id="attendees" title="Names read from the meeting window (speaker OCR)"></div>
+    </div>
     <h2>Deliverables</h2>
     <div id="docTabs" class="doctabs" hidden></div>
     <div id="minutes"><span class="hint">A local LLM (Ollama) writes these —
       nothing leaves this Mac. <b>Recap</b> works mid-meeting; after the call,
       generate <b>Minutes</b> or a follow-up <b>Email</b> draft.
-      Everything is saved to ~/Documents/Susurro.</span></div>
+      Everything is saved to ~/Documents/Scribatim.</span></div>
     <div class="modelrow">
       <label for="selModel">LLM</label>
       <select id="selModel" title="Which local Ollama model writes the deliverables — pull more with `ollama pull <model>` to see them here"></select>
@@ -404,6 +423,13 @@ function addCaption(c) {
 
 function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
 
+// attendee chips: names the speaker OCR reads off the meeting window
+function setAttendees(names) {
+  $("attendeesWrap").hidden = !names.length;
+  $("attendees").innerHTML = names.map(n =>
+    `<span class="chip"><i style="background:${avColor(n)}">${esc(n[0])}</i>${esc(n)}</span>`).join("");
+}
+
 function setLevel(source, rms) {
   const el = $("lvl-" + source); if (!el) return;
   const pct = Math.min(100, Math.round(Math.sqrt(rms) * 180));
@@ -412,9 +438,9 @@ function setLevel(source, rms) {
   setTimeout(() => { if (Date.now() - levelDecay[source] >= 480) el.style.width = "0%"; }, 500);
 }
 
-// Tiny markdown renderer (headings, bullets, tables, bold)
+// Tiny markdown renderer (headings, bullets, numbered lists, tables, bold)
 function md(src) {
-  const lines = src.split("\n"); let html = "", inUl = false, inTable = false;
+  const lines = src.split("\n"); let html = "", inUl = false, inOl = false, inTable = false;
   const inline = s => esc(s).replace(/\*\*(.+?)\*\*/g, "<b>$1</b>");
   for (const line of lines) {
     if (/^\s*\|/.test(line)) {
@@ -428,12 +454,16 @@ function md(src) {
       if (!inUl) { html += "<ul>"; inUl = true; }
       html += `<li>${inline(line.replace(/^\s*[-*] /, ""))}</li>`; continue;
     } else if (inUl) { html += "</ul>"; inUl = false; }
+    if (/^\s*\d+[.)] /.test(line)) {
+      if (!inOl) { html += "<ol>"; inOl = true; }
+      html += `<li>${inline(line.replace(/^\s*\d+[.)] /, ""))}</li>`; continue;
+    } else if (inOl) { html += "</ol>"; inOl = false; }
     if (/^### /.test(line)) html += `<h2>${inline(line.slice(4))}</h2>`;
     else if (/^## /.test(line)) html += `<h2>${inline(line.slice(3))}</h2>`;
     else if (/^# /.test(line)) html += `<h1>${inline(line.slice(2))}</h1>`;
     else if (line.trim()) html += `<p>${inline(line)}</p>`;
   }
-  if (inUl) html += "</ul>"; if (inTable) html += "</table>";
+  if (inUl) html += "</ul>"; if (inOl) html += "</ol>"; if (inTable) html += "</table>";
   return html;
 }
 
@@ -553,11 +583,17 @@ function connect() {
       updateBadge();
       setRunning(e.running, e.started_at);
       setNames(!!e.speaker_enabled);
+      setAttendees(e.attendees || []);
+      // rebuild from scratch — a reconnect must not duplicate the feed
+      $("feed").querySelectorAll(".cap").forEach(n => n.remove());
+      transcript.length = 0;
+      if (!e.captions.length) $("btnTranscript").hidden = true;
       for (const c of e.captions) addCaption(c);
     } else if (e.type === "caption") addCaption(e);
     else if (e.type === "level") setLevel(e.source, e.rms);
     else if (e.type === "status") setRunning(e.running, e.started_at);
     else if (e.type === "speaker") setNames(e.enabled);
+    else if (e.type === "roster") setAttendees(e.attendees || []);
   };
   es.onerror = () => { es.close(); setTimeout(connect, 2000); };
 }
