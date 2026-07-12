@@ -6,21 +6,21 @@ The user-facing behavior is in the [README](README.md); the data flow is in
 
 ## Process model
 
-One Python server (`susurro/`) plus up to three Swift subprocess helpers
+One Python server (`scribatim/`) plus up to three Swift subprocess helpers
 (`capture/`, compiled to `bin/` by `setup.sh`):
 
 | Helper | What | Protocol on stdout |
 |---|---|---|
-| `susurro-tap` | system-audio via Core Audio process tap | JSON header line, then raw f32 mono |
-| `susurro-mic` | mic via Apple voice processing (AEC) | same |
-| `susurro-speaker` | meeting-window OCR (optional) | one JSON line per frame |
+| `scribatim-tap` | system-audio via Core Audio process tap | JSON header line, then raw f32 mono |
+| `scribatim-mic` | mic via Apple voice processing (AEC) | same |
+| `scribatim-speaker` | meeting-window OCR (optional) | one JSON line per frame |
 
 **Why subprocesses instead of in-process bindings:** the capture APIs are
 Swift/ObjC-only; a wedged or crashed helper can't take down the server (Core
 Audio aggregate devices *do* occasionally wedge); and each helper maps to
 exactly one macOS privacy permission, so a user can grant/deny them
 independently. The pipe protocol is deliberately trivial — a JSON header or
-JSON lines — so helpers stay debuggable with `./bin/susurro-tap | head`.
+JSON lines — so helpers stay debuggable with `./bin/scribatim-tap | head`.
 
 **Graceful degradation everywhere:** AEC mic falls back to a raw sounddevice
 stream, MLX falls back to CPU, speaker OCR failing just means unnamed
@@ -31,7 +31,7 @@ captions. A meeting must never be lost because an optional layer broke.
 - **System audio** uses Core Audio process taps (macOS 14.4+) rather than a
   virtual output device (BlackHole-style): nothing to install system-wide,
   no audio-path changes the user can hear, works with any app.
-- **Mic AEC** (`susurro-mic`) exists because the mic otherwise hears the
+- **Mic AEC** (`scribatim-mic`) exists because the mic otherwise hears the
   meeting playing from open speakers, and Whisper transcribes whoever is
   loudest — the user's own lane gets drowned. Two non-obvious details:
   ducking by the voice unit is explicitly disabled (it would quiet the very
@@ -39,15 +39,15 @@ captions. A meeting must never be lost because an optional layer broke.
   *strongest* channel instead of averaging — the voice unit reports phantom
   channels (9 ch for a 1-ch laptop mic), and averaging silent padding would
   attenuate the voice up to 9×, below the speech gate.
-- **Speaker OCR** (`susurro-speaker`) reads the name the meeting app already
+- **Speaker OCR** (`scribatim-speaker`) reads the name the meeting app already
   draws on screen — attribution without a bot in the call. The Swift side is
-  deliberately dumb (emit all recognized text + positions); *which* text is
+  deliberately dumb (emit all recognized text + positions, plus a mechanical
+  color sample of the bands left of / below each text box); *which* text is
   the name is decided in Python (`speaker.py`), because the heuristics are
   the brittle part and iterating on them must not require recompiling.
   Window selection rejects Teams' main Chat/Activity windows by title —
   capturing the wrong window is worse than none, since chat sender names
-  also sit bottom-left and would *mislabel* speakers. In gallery view (>3
-  plausible names) the picker abstains rather than guesses.
+  also sit bottom-left and would *mislabel* speakers.
 
 ## Transcription
 
@@ -69,6 +69,25 @@ captions. A meeting must never be lost because an optional layer broke.
   injected into zh/ja/th/…); MLX inherits Whisper's own concatenation.
 
 ## Speaker attribution
+
+Two on-screen layouts, two mechanisms:
+
+- **Speaker view** — the active speaker fills the window; their name label
+  is the name-ish text nearest the bottom-left corner.
+- **Tile strip / gallery** (incl. during screen shares) — every tile shows
+  its name permanently, so text alone can't say who is talking. The strip is
+  recognized structurally: ≥4 evenly spaced Title-Case labels on one
+  baseline, with no other run of names right next to it (spreadsheets and
+  browser tab bars on a shared screen produce name-ish rows too — but
+  densely stacked or irregularly spaced, which is how they're rejected;
+  all of this was tuned against a real captured Teams screen-share meeting —
+  `tests/test_speaker.py` reproduces its geometry with anonymized names).
+  The strip yields the **attendee roster**
+  (a name must persist across frames to enter), and the active speaker is
+  the tile whose surrounding pixels glow in one consistent accent hue — the
+  outline meeting apps draw around the speaking tile. No clear glow → no
+  guess; captions fall back to "Participant" and minutes still get the
+  roster.
 
 OCR samples land on a rolling timeline; each caption asks "which name
 dominated [segment start, segment end]?" — a windowed majority vote. This
@@ -98,7 +117,7 @@ every process on the machine — a live transcript of a confidential call
 deserves a lock even locally. The `Host`-header allowlist blocks DNS
 rebinding, the token cookie is `HttpOnly`/`SameSite=Strict`, and CSP pins
 everything to `self`. Raw audio and OCR frames live only in memory; the only
-artifacts on disk are text files under `~/Documents/Susurro` (mode `0700`).
+artifacts on disk are text files under `~/Documents/Scribatim` (mode `0700`).
 
 ## Config philosophy
 

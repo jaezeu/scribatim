@@ -1,6 +1,4 @@
-# Susurro
-
-*Susurro — Spanish for "whisper".*
+# Scribatim
 
 A fully-local meeting copilot for macOS. It listens to **system audio** (whatever
 Teams / Zoom / Meet / a browser tab is playing) plus your **microphone**, shows
@@ -10,7 +8,7 @@ recaps, and follow-up email drafts** with a local LLM.
 
 **No cloud. No bots joining your call. No audio files on disk. Nothing leaves your Mac.**
 
-![Susurro dashboard — live translated captions with speaker names on the left; audio meters, generated minutes with action items, and one-click Recap / Minutes / Email on the right](docs/dashboard.png)
+![Scribatim dashboard — live captions translated from Japanese and Chinese with speaker names on the left; audio meters, attendee chips, generated minutes, and one-click Recap / Minutes / Email on the right](docs/dashboard.png)
 
 ## How it works
 
@@ -39,7 +37,7 @@ git clone <this-repo> && cd <this-repo>
    **⚡ Recap** (mid-meeting "where are we"), **✦ Minutes** (summary, decisions,
    action-item table with owners), **✉ Email** (ready-to-send follow-up draft).
    **Copy** puts the Markdown on your clipboard.
-4. Everything is also saved to `~/Documents/Susurro/<date_time>/`
+4. Everything is also saved to `~/Documents/Scribatim/<date_time>/`
    (`transcript.md`, `minutes.md`, `summary.md`, `email.md`).
 
 First launch triggers two one-time macOS privacy prompts for your terminal:
@@ -54,7 +52,7 @@ First launch triggers two one-time macOS privacy prompts for your terminal:
 - Raw audio lives only in memory; it is never written to disk.
 - Whisper and the minutes LLM (Ollama) run entirely on-device. The only network
   activity ever is the **one-time model download** during `setup.sh`.
-- Saved transcripts/minutes go to `~/Documents/Susurro` (mode `0700`).
+- Saved transcripts/minutes go to `~/Documents/Scribatim` (mode `0700`).
 
 > ⚖️ Recording/transcribing calls may require participant consent depending on
 > your jurisdiction and company policy — that decision is yours.
@@ -95,18 +93,30 @@ and line-breaking. Two tips for best results:
 ### Speaker names (experimental)
 
 The **👤 Names** toggle labels participant captions with real names — no bot
-in the call: it reads the active-speaker name that Zoom/Teams already draw on
-screen, using ScreenCaptureKit + Apple's on-device Vision OCR (~1 frame/s,
-OCR'd in memory, never stored). Minutes then get real action-item owners
+in the call: it reads what Zoom/Teams already draw on the meeting window,
+using ScreenCaptureKit + Apple's on-device Vision OCR (~1 frame/s, analyzed
+in memory, never stored). Minutes then get real action-item owners
 ("Alice to send pricing by Friday" instead of "Participant").
 
+- **Speaker view**: the enlarged tile's name label is used directly.
+- **Screen share / gallery** (tile strip): every tile shows its name all the
+  time, so the helper also samples the pixels around each label and picks
+  the tile the app outlines in its "speaking" color; if no tile clearly
+  glows, it abstains rather than guess.
+- **Attendees**: names on the participant tile strip are collected into a
+  roster — shown in the sidebar and handed to the minutes LLM, so
+  deliverables use real names even when individual captions are unlabeled.
 - Off by default; first use prompts for the **Screen Recording** permission.
-- Best-effort by design: works best in **speaker view** on Zoom / Teams
-  desktop; in gallery view it abstains rather than guess. Overlapping voices
-  follow whoever the meeting app highlights. Expect occasional mislabels.
+- Best-effort by design: expect occasional gaps and mislabels; overlapping
+  voices follow whoever the meeting app highlights.
 - Teams: keep the meeting in its own pop-out window (the Teams default) —
   the main Chat/Activity window is deliberately ignored.
 - Meet/browser meetings aren't recognized yet (desktop Zoom/Teams only).
+- Validating: run `.venv/bin/python -m scribatim.speaker` for ~30s during a
+  live meeting while someone talks — it dumps what the OCR sees to
+  `~/Documents/Scribatim/speaker_debug.txt` and ends with a self-graded
+  verdict on whether speaker naming works for that meeting's layout
+  (pass a number for a longer window, e.g. `… scribatim.speaker 60`).
 
 ## Platform support
 
@@ -131,7 +141,7 @@ WASAPI-loopback capture backend and keep the rest unchanged. PRs welcome.
   read-only on the Mac's output mix.
 - Headphones optional: the mic is captured through Apple's voice-processing
   engine (echo cancellation), so on open speakers your lane hears you, not the
-  meeting playback. If the helper can't start, Susurro falls back to the raw mic
+  meeting playback. If the helper can't start, Scribatim falls back to the raw mic
   — then headphones are recommended.
 - If you switch audio output devices mid-meeting (e.g. AirPods connect), press
   Stop/Start to re-attach the tap to the new device.
