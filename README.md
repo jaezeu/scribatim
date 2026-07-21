@@ -143,6 +143,11 @@ WASAPI-loopback capture backend and keep the rest unchanged. PRs welcome.
   engine (echo cancellation), so on open speakers your lane hears you, not the
   meeting playback. If the helper can't start, Scribatim falls back to the raw mic
   — then headphones are recommended.
+- Your meeting audio is protected: macOS tends to turn the shared hardware mic
+  gain down when the echo-cancelled capture starts (which would make you sound
+  quiet to other participants). Scribatim snapshots your input volume before
+  capturing, restores it if anything winds it down mid-meeting, and puts it
+  back on exit.
 - If you switch audio output devices mid-meeting (e.g. AirPods connect), press
   Stop/Start to re-attach the tap to the new device.
 - Translation quality: Whisper translates *to English only* (that's the use case).

@@ -242,6 +242,31 @@ class Roster(unittest.TestCase):
             tracker._ingest({"time": 1000.0 + i, "texts": frame})
         self.assertEqual(tracker.name_for(1000.0, 1006.0), "Suresh Pawar")
 
+    def test_name_carried_over_a_glow_flicker(self):
+        # the outline faded between sentences: no samples inside the caption's
+        # window, but the same person still has the floor
+        tracker = SpeakerTracker()
+        for i in range(6):
+            frame = with_glow(TEAMS_SHARE_FRAME, "Suresh Pawar")
+            tracker._ingest({"time": 1000.0 + i, "texts": frame})
+        self.assertEqual(tracker.name_for(1008.0, 1012.0), "Suresh Pawar")
+
+    def test_name_not_carried_over_a_long_gap(self):
+        tracker = SpeakerTracker()
+        for i in range(6):
+            frame = with_glow(TEAMS_SHARE_FRAME, "Suresh Pawar")
+            tracker._ingest({"time": 1000.0 + i, "texts": frame})
+        self.assertIsNone(tracker.name_for(1030.0, 1034.0))
+
+    def test_window_votes_beat_carried_name(self):
+        tracker = SpeakerTracker()
+        tracker._ingest({"time": 1000.0,
+                         "texts": with_glow(TEAMS_SHARE_FRAME, "Suresh Pawar")})
+        for i in range(3):
+            tracker._ingest({"time": 1004.0 + i,
+                             "texts": with_glow(TEAMS_SHARE_FRAME, "Kevin Vu")})
+        self.assertEqual(tracker.name_for(1003.0, 1008.0), "Kevin Vu")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,5 @@
 {
-  "whisper_model": "medium",
+  "whisper_model": "large-v3",
   "whisper_backend": "auto",
   "language": "",
   "vocabulary": "",

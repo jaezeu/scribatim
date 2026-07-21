@@ -269,15 +269,31 @@ class SpeakerTracker:
         for line in proc.stderr:
             log.info("speaker: %s", line.decode(errors="replace").rstrip())
 
+    CARRY_S = 10.0  # how far back a name may be carried when the window is empty
+
     def name_for(self, t0: float, t1: float) -> str | None:
-        """Majority-vote name over samples inside [t0, t1] (±1s slack)."""
+        """Majority-vote name over samples inside [t0, t1] (±1s slack).
+
+        The glow/label signal flickers — an outline fades between sentences,
+        OCR misses a frame — so an empty window is common in the middle of one
+        person's turn. Rather than dropping to "Participant", carry the most
+        recent name seen within CARRY_S before the window: speakers keep the
+        floor for many seconds at a time, so the nearest recent name is far
+        more often right than no name at all.
+        """
         votes: dict[str, int] = {}
         for t, name in list(self.samples):
             if t0 - 1.0 <= t <= t1 + 1.0:
                 votes[name] = votes.get(name, 0) + 1
-        if not votes:
-            return None
-        return max(votes.items(), key=lambda kv: kv[1])[0]
+        if votes:
+            return max(votes.items(), key=lambda kv: kv[1])[0]
+        for t, name in reversed(list(self.samples)):
+            if t > t1 + 1.0:
+                continue
+            if t < t0 - self.CARRY_S:
+                break
+            return name
+        return None
 
     def roster(self) -> list[str]:
         """Attendee names seen reliably on screen, most frequent first.

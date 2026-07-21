@@ -20,19 +20,52 @@ TAP_BINARY = BIN_DIR / "scribatim-tap"
 MIC_BINARY = BIN_DIR / "scribatim-mic"
 
 
-def to_16k(samples: np.ndarray, rate: int) -> np.ndarray:
-    if rate == TARGET_RATE:
-        return samples
-    if rate % TARGET_RATE == 0:
-        k = rate // TARGET_RATE
-        n = len(samples) - len(samples) % k
-        return samples[:n].reshape(-1, k).mean(axis=1)
-    dst_len = int(len(samples) * TARGET_RATE / rate)
-    return np.interp(
-        np.linspace(0, len(samples) - 1, dst_len),
-        np.arange(len(samples)),
-        samples,
-    ).astype(np.float32)
+class Resampler:
+    """Streaming downsampler to 16 kHz with a proper anti-aliasing low-pass.
+
+    The naive alternatives — box-averaging 48 kHz (integer ratio) or bare
+    linear interpolation of the mic helper's 24 kHz — fold everything above
+    8 kHz back into the speech band; that aliasing is inaudible in a meter
+    but measurably hurts Whisper. A short windowed-sinc FIR (cutoff 7.2 kHz)
+    ahead of the rate conversion removes it for ~0.1 ms of CPU per second of
+    audio. Stateful: chunk boundaries are seamless, so it can sit directly
+    behind the helper pipe reads.
+    """
+
+    TAPS = 63  # ~2 ms group delay at 24/48 kHz — irrelevant for captions
+
+    def __init__(self, rate: int):
+        self.rate = rate
+        self.step = rate / TARGET_RATE  # source samples per output sample
+        fc = min(0.45 * TARGET_RATE, 0.45 * rate) / rate  # cycles/sample
+        k = np.arange(self.TAPS) - (self.TAPS - 1) / 2
+        kernel = 2 * fc * np.sinc(2 * fc * k) * np.hamming(self.TAPS)
+        self._kernel = (kernel / kernel.sum()).astype(np.float32)
+        self._tail = np.zeros(self.TAPS - 1, dtype=np.float32)  # filter history
+        self._carry = np.empty(0, dtype=np.float32)  # filtered, not yet consumed
+        self._pos = 0.0  # next output position within _carry+filtered, in source samples
+
+    def feed(self, chunk: np.ndarray) -> np.ndarray:
+        if self.rate == TARGET_RATE:
+            return chunk
+        buf = np.concatenate([self._tail, chunk.astype(np.float32, copy=False)])
+        if len(buf) < self.TAPS:
+            self._tail = buf
+            return np.empty(0, dtype=np.float32)
+        filtered = np.convolve(buf, self._kernel, mode="valid").astype(np.float32)
+        self._tail = buf[-(self.TAPS - 1):]
+        stream = np.concatenate([self._carry, filtered])
+        count = int((len(stream) - 1 - self._pos) // self.step) + 1
+        if count <= 0:
+            self._carry = stream
+            return np.empty(0, dtype=np.float32)
+        positions = self._pos + self.step * np.arange(count)
+        out = np.interp(positions, np.arange(len(stream)), stream).astype(np.float32)
+        next_pos = self._pos + self.step * count
+        keep_from = min(int(next_pos), len(stream) - 1)
+        self._carry = stream[keep_from:]
+        self._pos = next_pos - keep_from
+        return out
 
 
 class Segmenter:
@@ -149,13 +182,16 @@ class HelperProcessSource:
 
     def _read_audio(self):
         assert self.proc and self.proc.stdout
+        resampler = Resampler(self.rate)
         while True:
             data = self.proc.stdout.read(self.rate)  # rate/4 frames ≈ 0.25 s per read
             if not data:
                 break
             samples = np.frombuffer(data[:len(data) - len(data) % 4], dtype="<f4")
             if len(samples):
-                self.segmenter.feed(to_16k(samples, self.rate))
+                out = resampler.feed(samples)
+                if len(out):
+                    self.segmenter.feed(out)
         self.segmenter.flush()
 
     def _read_stderr(self):
@@ -228,9 +264,12 @@ class MicSource:
             info = sd.query_devices(kind="input")
             native = int(info["default_samplerate"])
             log.info("mic falling back to native %d Hz", native)
+            resampler = Resampler(native)
 
             def cb_native(indata, frames, time_info, status):
-                self.segmenter.feed(to_16k(indata[:, 0].copy(), native))
+                out = resampler.feed(indata[:, 0].copy())
+                if len(out):
+                    self.segmenter.feed(out)
 
             self.stream = sd.InputStream(
                 samplerate=native, channels=1, dtype="float32",

@@ -13,8 +13,11 @@ Two backends, picked automatically:
 import logging
 import platform
 import queue
+import re
 import threading
 import time
+import zlib
+from collections import Counter
 
 import numpy as np
 
@@ -36,12 +39,74 @@ HALLUCINATION_PHRASES = {
 HALLUCINATION_RMS = 0.02  # direct mic speech w/ AGC is typically ≥0.05
 
 
+def _top_word(text: str) -> tuple[int, float]:
+    """(count of the most repeated word, its share of all words)."""
+    words = re.findall(r"[^\W_]+", text.lower())
+    if not words:
+        return 0, 0.0
+    top = Counter(words).most_common(1)[0][1]
+    return top, top / len(words)
+
+
 def is_hallucination(text_en: str, audio: np.ndarray) -> bool:
-    """True when a decoded caption is one of Whisper's stock hallucination
-    phrases AND the audio is too quiet to be a real, direct utterance."""
-    if text_en.strip(" .!?,¡¿").lower() not in HALLUCINATION_PHRASES:
-        return False
-    return float(np.sqrt(np.mean(audio ** 2))) < HALLUCINATION_RMS
+    """True when a decoded caption is one of Whisper's known failure shapes.
+
+    Two shapes, two gates:
+      * stock phrases ("Thank you.") and moderate word repetition are only
+        dropped when the audio is too quiet to be a real, direct utterance —
+        the decoder invents these on breaths / echo residue / a muted mic
+        ("demokrat! demokrat! demokrat!" on silence is the classic loop);
+      * an extreme loop (one word ≥5×, or a long phrase that zlib squashes
+        >2.4× — Whisper's own repetition metric) is dropped at any volume:
+        it is a stuck decoder, not something a person said.
+
+    `audio` must be the raw captured segment (pre-normalization) so the RMS
+    gate reflects what the microphone actually heard.
+    """
+    quiet = float(np.sqrt(np.mean(audio ** 2))) < HALLUCINATION_RMS
+    if quiet and text_en.strip(" .!?,¡¿").lower() in HALLUCINATION_PHRASES:
+        return True
+    top, share = _top_word(text_en)
+    if quiet and top >= 3 and share >= 0.7:
+        return True
+    if top >= 5 and share >= 0.8:
+        return True
+    raw = text_en.encode()
+    return len(raw) >= 60 and len(raw) > 2.4 * len(zlib.compress(raw))
+
+
+def _suspect_segment(avg_logprob: float, no_speech_prob: float,
+                     compression_ratio: float, strict: bool = False) -> bool:
+    """Whisper's own per-segment quality signals, applied as a drop filter:
+    text decoded over what the model itself scored as silence, or text whose
+    compression ratio says the decoder looped. Both backends expose these;
+    neither uses them to *drop* (only for temperature fallback), so confident
+    garbage still reaches the caller without this.
+
+    `strict` is for segments the VAD already distrusts (little/no speech,
+    or near-silent audio): there Whisper fabricates fluent full sentences
+    with only mediocre confidence, so any single weak signal is enough to
+    drop — the joint rule below only catches the blatant cases."""
+    if strict:
+        return (no_speech_prob > 0.5 or avg_logprob < -0.85
+                or compression_ratio > 2.2)
+    if no_speech_prob > 0.6 and avg_logprob < -1.0:
+        return True
+    return compression_ratio > 2.4
+
+
+def normalize_segment(audio: np.ndarray) -> np.ndarray:
+    """Peak-normalize a quiet segment before decoding. Whisper's accuracy
+    drops on faint audio (a distant speaker on the tap, an AGC-less mic);
+    the gain is capped so near-silence isn't amplified into decodable noise,
+    and already-loud audio is left untouched."""
+    peak = float(np.max(np.abs(audio))) if len(audio) else 0.0
+    if peak < 1e-4:
+        return audio
+    gain = min(0.9 / peak, 12.0)
+    if gain <= 1.0:
+        return audio
+    return (audio * gain).astype(np.float32)
 
 # Verified mlx-community conversions of the OpenAI Whisper weights.
 MLX_REPOS = {
@@ -139,17 +204,20 @@ class Transcriber:
         except queue.Full:
             log.warning("transcription queue full, dropping %.1fs segment", len(audio) / 16000)
 
-    def _has_speech(self, audio: np.ndarray) -> bool:
-        """Silero VAD pre-check: Whisper hallucinates captions ("Thank you",
-        random foreign words) on breaths/keyboard/noise that pass the energy
-        gate. The CT2 backend filters these internally (vad_filter=True);
-        MLX has no VAD, so we run the same Silero model ourselves."""
+    def _speech_ratio(self, audio: np.ndarray) -> float:
+        """Fraction of the segment Silero VAD scores as speech. Whisper
+        hallucinates captions (stock phrases, fluent invented sentences) on
+        breaths/keyboard/noise that pass the energy gate; the ratio decides
+        whether a segment is skipped outright (0.0) or decoded in strict
+        mode (low ratio). Must be fed the RAW capture — the pre-decode gain
+        boost makes room noise look more speech-like to the VAD."""
         try:
             from faster_whisper.vad import VadOptions, get_speech_timestamps
-            return bool(get_speech_timestamps(
-                audio, VadOptions(threshold=0.6, min_speech_duration_ms=300)))
+            spans = get_speech_timestamps(
+                audio, VadOptions(threshold=0.5, min_speech_duration_ms=250))
+            return sum(s["end"] - s["start"] for s in spans) / len(audio)
         except Exception:
-            return True  # never drop captions because the VAD failed
+            return 1.0  # never drop captions because the VAD failed
 
     def _prompt_for(self, task: str, language):
         # The vocabulary prompt is English text; priming a non-English
@@ -159,26 +227,29 @@ class Transcriber:
             prompt = None
         return prompt
 
-    def _decode(self, audio: np.ndarray, task: str, language=None):
+    def _decode(self, audio: np.ndarray, task: str, language=None, strict=False):
         """Returns (text, detected_language, language_probability)."""
         if self._mlx_repo:
-            return self._decode_mlx(audio, task, language)
-        return self._decode_ct2(audio, task, language)
+            return self._decode_mlx(audio, task, language, strict)
+        return self._decode_ct2(audio, task, language, strict)
 
-    def _decode_mlx(self, audio: np.ndarray, task: str, language=None):
-        if task == "translate" and not self._has_speech(audio):
-            return "", language or "en", 0.0
+    def _decode_mlx(self, audio: np.ndarray, task: str, language=None, strict=False):
         result = self._mlx.transcribe(
             audio, path_or_hf_repo=self._mlx_repo,
             task=task, language=language,
             initial_prompt=self._prompt_for(task, language),
             condition_on_previous_text=False, verbose=None)
-        # Whisper's own segment concatenation is script-aware, so no joiner
-        # fix-up is needed here.
+        # Concatenating segment texts verbatim reproduces result["text"]
+        # (each segment carries its own leading space where the script wants
+        # one), so filtering low-quality segments keeps the join script-aware.
+        segs = [s for s in result.get("segments", [])
+                if not _suspect_segment(s.get("avg_logprob", 0.0),
+                                        s.get("no_speech_prob", 0.0),
+                                        s.get("compression_ratio", 0.0), strict)]
         lang = language or result.get("language") or "en"
-        return result["text"].strip(), lang, 1.0
+        return "".join(s["text"] for s in segs).strip(), lang, 1.0
 
-    def _decode_ct2(self, audio: np.ndarray, task: str, language=None):
+    def _decode_ct2(self, audio: np.ndarray, task: str, language=None, strict=False):
         segments, info = self.model.transcribe(
             audio, task=task, language=language,
             beam_size=self.cfg["beam_size"],
@@ -187,7 +258,10 @@ class Transcriber:
             vad_filter=True, condition_on_previous_text=False)
         out_lang = "en" if task == "translate" else (language or info.language)
         joiner = "" if out_lang in NO_SPACE_LANGS else " "
-        text = joiner.join(s.text.strip() for s in segments).strip()
+        text = joiner.join(
+            s.text.strip() for s in segments
+            if not _suspect_segment(s.avg_logprob, s.no_speech_prob,
+                                    s.compression_ratio, strict)).strip()
         return text, info.language, float(info.language_probability)
 
     def _run(self):
@@ -203,11 +277,24 @@ class Transcriber:
                 # unreliable on short clips with smaller models (e.g. zh/yue/ja
                 # confusion) — cfg["language"] pins the source language instead.
                 forced = self.cfg.get("language") or None
-                text_en, detected, prob = self._decode(audio, "translate", language=forced)
+                # VAD on the RAW audio: no speech at all → skip; marginal
+                # speech or near-silence → strict mode (no gain boost, and
+                # any single weak quality signal drops a decoded segment).
+                # Whisper writes fluent fiction over exactly these segments.
+                ratio = self._speech_ratio(audio)
+                if ratio <= 0.0:
+                    log.info("dropped %.1fs segment: VAD found no speech",
+                             len(audio) / 16000)
+                    continue
+                raw_rms = float(np.sqrt(np.mean(audio ** 2)))
+                strict = ratio < 0.4 or raw_rms < HALLUCINATION_RMS
+                norm = audio if strict else normalize_segment(audio)
+                text_en, detected, prob = self._decode(
+                    norm, "translate", language=forced, strict=strict)
                 if not text_en:
                     continue
                 if is_hallucination(text_en, audio):
-                    log.info("dropped likely hallucination on quiet audio: %r", text_en)
+                    log.info("dropped likely hallucination: %r", text_en)
                     continue
                 lang = forced or detected
                 event = {
@@ -222,9 +309,15 @@ class Transcriber:
                     "latency": None,
                 }
                 if lang != "en" and self.cfg["show_original"]:
-                    text_orig, _, _ = self._decode(audio, "transcribe", language=lang)
+                    text_orig, _, _ = self._decode(
+                        norm, "transcribe", language=lang, strict=strict)
                     if text_orig and text_orig != text_en:
                         event["text_orig"] = text_orig
+                    elif text_orig == text_en:
+                        # a real non-English utterance transcribes differently
+                        # than it translates; verbatim agreement means the
+                        # short-clip language detection misfired on English
+                        event["lang"] = "en"
                 event["latency"] = round(time.time() - t0, 1)
                 self.emit(event)
             except Exception:

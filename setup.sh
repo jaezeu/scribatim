@@ -26,7 +26,7 @@ swiftc -O capture/systemaudio.swift -o bin/scribatim-tap \
 
 echo "==> Compiling echo-cancelled mic helper (Swift)…"
 swiftc -O capture/micaec.swift -o bin/scribatim-mic \
-  -framework AVFoundation
+  -framework AVFoundation -framework CoreAudio
 
 echo "==> Compiling speaker-OCR helper (Swift)…"
 swiftc -O capture/speakerocr.swift -o bin/scribatim-speaker \

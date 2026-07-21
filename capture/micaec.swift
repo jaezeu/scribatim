@@ -13,6 +13,7 @@
 // Nothing is written to disk and nothing leaves the machine.
 
 import AVFoundation
+import CoreAudio
 import Foundation
 
 func fail(_ message: String) -> Never {
@@ -22,6 +23,97 @@ func fail(_ message: String) -> Never {
 
 func log(_ message: String) {
     FileHandle.standardError.write(("[mic-aec] " + message + "\n").data(using: .utf8)!)
+}
+
+// MARK: - Input gain guard
+//
+// The voice-processing unit adjusts the *hardware* input gain, which is
+// shared machine-wide. Disabling AGC (below) is supposed to stop that, but
+// macOS still winds the physical input volume down when voice processing
+// engages — and Teams/Zoom read the same turned-down device, so the user
+// suddenly sounds faint *in their own meeting*. Snapshot the gain the user
+// chose before the voice unit can touch it, put it back whenever it drops
+// while we run, and leave it restored on exit.
+final class InputGainGuard {
+    private let device: AudioDeviceID
+    private var baselines: [(address: AudioObjectPropertyAddress, value: Float32)] = []
+    private var lastLog = Date.distantPast
+
+    init?() {
+        var addr = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        var dev = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        guard AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject),
+                                         &addr, 0, nil, &size, &dev) == noErr,
+              dev != kAudioObjectUnknown else { return nil }
+        device = dev
+        // main element first, then per-channel volumes (devices expose either)
+        for element in [kAudioObjectPropertyElementMain, 1, 2] as [UInt32] {
+            var a = AudioObjectPropertyAddress(
+                mSelector: kAudioDevicePropertyVolumeScalar,
+                mScope: kAudioDevicePropertyScopeInput,
+                mElement: element)
+            var settable = DarwinBoolean(false)
+            guard AudioObjectHasProperty(device, &a),
+                  AudioObjectIsPropertySettable(device, &a, &settable) == noErr,
+                  settable.boolValue, let v = read(a) else { continue }
+            baselines.append((a, v))
+        }
+        if baselines.isEmpty { return nil }
+    }
+
+    private func read(_ address: AudioObjectPropertyAddress) -> Float32? {
+        var a = address
+        var v = Float32(0)
+        var size = UInt32(MemoryLayout<Float32>.size)
+        return AudioObjectGetPropertyData(device, &a, 0, nil, &size, &v) == noErr ? v : nil
+    }
+
+    private func write(_ address: AudioObjectPropertyAddress, _ value: Float32) {
+        var a = address
+        var v = value
+        AudioObjectSetPropertyData(device, &a, 0, nil,
+                                   UInt32(MemoryLayout<Float32>.size), &v)
+    }
+
+    // Re-check on every gain change the HAL reports. Restoring only *drops*
+    // below the snapshot means a user deliberately raising their mic volume
+    // mid-meeting is never fought; enforce() writing the baseline back does
+    // not re-trigger itself (the guard below it is then false).
+    func watch() {
+        for (address, _) in baselines {
+            var a = address
+            AudioObjectAddPropertyListenerBlock(device, &a, DispatchQueue.main) {
+                [weak self] _, _ in self?.enforce()
+            }
+        }
+    }
+
+    func enforce() {
+        for (address, baseline) in baselines {
+            guard let current = read(address), current < baseline - 0.02 else { continue }
+            write(address, baseline)
+            if Date().timeIntervalSince(lastLog) > 5 {
+                lastLog = Date()
+                log(String(format:
+                    "input gain was wound down to %.2f — restored to %.2f",
+                    current, baseline))
+            }
+        }
+    }
+
+    func restore() {
+        for (address, baseline) in baselines { write(address, baseline) }
+    }
+}
+
+// Snapshot BEFORE voice processing is enabled — that's the gain the user set.
+let gainGuard = InputGainGuard()
+if gainGuard == nil {
+    log("input gain guard unavailable (gain not adjustable on this device) — skipping")
 }
 
 let engine = AVAudioEngine()
@@ -91,10 +183,19 @@ do {
 }
 log("streaming echo-cancelled microphone (ctrl-c to stop)")
 
+// The voice unit typically drops the gain right as the engine starts (and
+// sometimes again a moment later) — check immediately, shortly after, and
+// then on every change the HAL reports.
+gainGuard?.enforce()
+gainGuard?.watch()
+DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { gainGuard?.enforce() }
+
 // MARK: - Clean shutdown
 
 func teardown() {
     engine.stop()
+    // the voice unit does not put the hardware gain back when it disengages
+    gainGuard?.restore()
     fflush(stdout)
 }
 
