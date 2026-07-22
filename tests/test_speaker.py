@@ -267,6 +267,41 @@ class Roster(unittest.TestCase):
                              "texts": with_glow(TEAMS_SHARE_FRAME, "Kevin Vu")})
         self.assertEqual(tracker.name_for(1003.0, 1008.0), "Kevin Vu")
 
+    def test_lingering_previous_glow_does_not_steal_the_turn(self):
+        # Suresh stops talking; his outline keeps fading into the first
+        # second of Kevin's reply. The window-start samples still show
+        # Suresh — they must not outvote Kevin's samples later in the turn.
+        tracker = SpeakerTracker()
+        for t in (1005.0, 1006.0, 1007.0):
+            tracker._ingest({"time": t,
+                             "texts": with_glow(TEAMS_SHARE_FRAME, "Suresh Pawar")})
+        for t in (1008.0, 1009.0):
+            tracker._ingest({"time": t,
+                             "texts": with_glow(TEAMS_SHARE_FRAME, "Kevin Vu")})
+        self.assertEqual(tracker.name_for(1005.7, 1009.0), "Kevin Vu")
+
+    def test_glow_arriving_after_the_words_names_the_speaker(self):
+        # short utterance: the app draws Kevin's outline only after the
+        # caption window closed. The trailing sample must beat carrying the
+        # previous speaker's name backward over the turn change.
+        tracker = SpeakerTracker()
+        tracker._ingest({"time": 998.0,
+                         "texts": with_glow(TEAMS_SHARE_FRAME, "Suresh Pawar")})
+        tracker._ingest({"time": 1004.2,
+                         "texts": with_glow(TEAMS_SHARE_FRAME, "Kevin Vu")})
+        self.assertEqual(tracker.name_for(1000.0, 1003.0), "Kevin Vu")
+
+    def test_next_speakers_reply_does_not_steal_the_caption(self):
+        # Suresh's own turn has in-window samples; Kevin's outline lighting
+        # up right after the window (his reply) carries less weight.
+        tracker = SpeakerTracker()
+        for t in (1002.0, 1003.0):
+            tracker._ingest({"time": t,
+                             "texts": with_glow(TEAMS_SHARE_FRAME, "Suresh Pawar")})
+        tracker._ingest({"time": 1005.5,
+                         "texts": with_glow(TEAMS_SHARE_FRAME, "Kevin Vu")})
+        self.assertEqual(tracker.name_for(1000.0, 1004.0), "Suresh Pawar")
+
 
 if __name__ == "__main__":
     unittest.main()

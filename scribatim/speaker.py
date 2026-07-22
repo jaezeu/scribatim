@@ -269,26 +269,44 @@ class SpeakerTracker:
         for line in proc.stderr:
             log.info("speaker: %s", line.decode(errors="replace").rstrip())
 
-    CARRY_S = 10.0  # how far back a name may be carried when the window is empty
+    LEAD_GUARD_S = 1.5  # previous speaker's outline lingers this long into a turn
+    TRAIL_S = 2.0       # this speaker's outline appears late / persists past the words
+    CARRY_S = 10.0      # how far back a name may be carried when nothing voted
 
     def name_for(self, t0: float, t1: float) -> str | None:
-        """Majority-vote name over samples inside [t0, t1] (±1s slack).
+        """Who was speaking during the caption window [t0, t1]?
 
-        The glow/label signal flickers — an outline fades between sentences,
-        OCR misses a frame — so an empty window is common in the middle of one
-        person's turn. Rather than dropping to "Participant", carry the most
-        recent name seen within CARRY_S before the window: speakers keep the
-        floor for many seconds at a time, so the nearest recent name is far
-        more often right than no name at all.
+        The glow evidence lags the audio: meeting apps draw the outline a
+        beat after someone starts talking and keep it lit for a second or two
+        after they stop. So samples at the start of the window often still
+        show the *previous* speaker's fading outline — counting them mislabels
+        every turn change — while samples near and just past the end are the
+        most trustworthy. Votes therefore skip the first LEAD_GUARD_S of the
+        window, and samples up to TRAIL_S after it count at half weight (they
+        could already belong to the next speaker's reply). Ties break toward
+        the name seen latest.
+
+        The signal also flickers mid-turn (the outline fades between
+        sentences, OCR misses a frame), so an empty vote set falls back to
+        the most recent name within CARRY_S: speakers keep the floor for many
+        seconds at a time, so the nearest recent name is far more often right
+        than no name at all.
         """
-        votes: dict[str, int] = {}
+        votes: dict[str, list[float]] = {}  # name -> [weight, latest sample time]
         for t, name in list(self.samples):
-            if t0 - 1.0 <= t <= t1 + 1.0:
-                votes[name] = votes.get(name, 0) + 1
+            if t0 + self.LEAD_GUARD_S <= t <= t1:
+                w = 2.0
+            elif t1 < t <= t1 + self.TRAIL_S:
+                w = 1.0
+            else:
+                continue
+            rec = votes.setdefault(name, [0.0, t])
+            rec[0] += w
+            rec[1] = max(rec[1], t)
         if votes:
-            return max(votes.items(), key=lambda kv: kv[1])[0]
+            return max(votes.items(), key=lambda kv: (kv[1][0], kv[1][1]))[0]
         for t, name in reversed(list(self.samples)):
-            if t > t1 + 1.0:
+            if t > t1 + self.TRAIL_S:
                 continue
             if t < t0 - self.CARRY_S:
                 break
