@@ -12,7 +12,7 @@ recaps, and follow-up email drafts** with a local LLM.
 
 ## How it works
 
-![Pipeline: meeting apps feed a read-only Core Audio tap and your mic feeds an echo-cancelled capture; both flow into local Whisper for translated live captions. Optionally, on-screen speaker names are OCR'd locally. A local Ollama LLM turns the transcript into recap, minutes, and an email draft.](docs/pipeline.svg)
+![Pipeline: meeting apps feed a read-only Core Audio tap and your mic is captured raw; both flow into local Whisper for translated live captions. Optionally, on-screen speaker names are OCR'd locally. A local Ollama LLM turns the transcript into recap, minutes, and an email draft.](docs/pipeline.svg)
 
 ## Requirements
 
@@ -69,7 +69,6 @@ First launch triggers two one-time macOS privacy prompts for your terminal:
 | `ollama_model`  | `llama3.2:3b` | default LLM for deliverables; the dashboard's **LLM dropdown** offers every pulled model per-generation — `ollama pull qwen2.5:7b` for richer minutes |
 | `vocabulary` | `""` | jargon/product names to bias transcription, e.g. `"Kubernetes, Terraform, POC"` |
 | `meeting_context` | `""` | one sentence about you/your meetings to shape minutes & emails, e.g. `"You are a sales engineer meeting customers."` |
-| `mic_aec` | `true` | echo-cancelled mic (Apple voice processing): on open speakers, meeting audio is subtracted from your mic lane. Set `false` for the raw mic |
 | `speaker_ocr` | `false` | start with speaker names on (same as the 👤 toggle in the dashboard) |
 | `segment_silence_seconds` | `0.8` | pause length that ends an utterance |
 
@@ -139,15 +138,14 @@ WASAPI-loopback capture backend and keep the rest unchanged. PRs welcome.
 
 - Works with **any** meeting app — nothing is injected into the call; the tap is
   read-only on the Mac's output mix.
-- Headphones optional: the mic is captured through Apple's voice-processing
-  engine (echo cancellation), so on open speakers your lane hears you, not the
-  meeting playback. If the helper can't start, Scribatim falls back to the raw mic
-  — then headphones are recommended.
-- Your meeting audio is protected: macOS tends to turn the shared hardware mic
-  gain down when the echo-cancelled capture starts (which would make you sound
-  quiet to other participants). Scribatim snapshots your input volume before
-  capturing, restores it if anything winds it down mid-meeting, and puts it
-  back on exit.
+- Your meeting audio is untouched: the mic is read raw from whatever input
+  device is selected in System Settings (built-in mic or a headset), with no
+  system-wide audio processing engaged — Teams/Zoom hear you exactly as they
+  would without Scribatim running.
+- Headphones optional: on open speakers the mic also hears the meeting
+  playback, so mic segments that are just a delayed copy of the system audio
+  are detected (by correlating against the tap) and dropped instead of being
+  transcribed twice as "You".
 - If you switch audio output devices mid-meeting (e.g. AirPods connect), press
   Stop/Start to re-attach the tap to the new device.
 - Translation quality: Whisper translates *to English only* (that's the use case).

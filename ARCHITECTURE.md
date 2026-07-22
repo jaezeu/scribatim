@@ -6,14 +6,16 @@ The user-facing behavior is in the [README](README.md); the data flow is in
 
 ## Process model
 
-One Python server (`scribatim/`) plus up to three Swift subprocess helpers
+One Python server (`scribatim/`) plus up to two Swift subprocess helpers
 (`capture/`, compiled to `bin/` by `setup.sh`):
 
 | Helper | What | Protocol on stdout |
 |---|---|---|
 | `scribatim-tap` | system-audio via Core Audio process tap | JSON header line, then raw f32 mono |
-| `scribatim-mic` | mic via Apple voice processing (AEC) | same |
 | `scribatim-speaker` | meeting-window OCR (optional) | one JSON line per frame |
+
+(The mic is captured in-process via sounddevice/PortAudio — see below for
+why it deliberately is *not* a voice-processing helper.)
 
 **Why subprocesses instead of in-process bindings:** the capture APIs are
 Swift/ObjC-only; a wedged or crashed helper can't take down the server (Core
@@ -22,30 +24,33 @@ exactly one macOS privacy permission, so a user can grant/deny them
 independently. The pipe protocol is deliberately trivial — a JSON header or
 JSON lines — so helpers stay debuggable with `./bin/scribatim-tap | head`.
 
-**Graceful degradation everywhere:** AEC mic falls back to a raw sounddevice
-stream, MLX falls back to CPU, speaker OCR failing just means unnamed
-captions. A meeting must never be lost because an optional layer broke.
+**Graceful degradation everywhere:** the mic falls back from 16 kHz to the
+device's native rate, MLX falls back to CPU, speaker OCR failing just means
+unnamed captions. A meeting must never be lost because an optional layer
+broke.
 
 ## Capture decisions
 
 - **System audio** uses Core Audio process taps (macOS 14.4+) rather than a
   virtual output device (BlackHole-style): nothing to install system-wide,
   no audio-path changes the user can hear, works with any app.
-- **Mic AEC** (`scribatim-mic`) exists because the mic otherwise hears the
-  meeting playing from open speakers, and Whisper transcribes whoever is
-  loudest — the user's own lane gets drowned. Three non-obvious details:
-  ducking by the voice unit is explicitly disabled (it would quiet the very
-  meeting audio the tap is transcribing); the helper streams the
-  *strongest* channel instead of averaging — the voice unit reports phantom
-  channels (9 ch for a 1-ch laptop mic), and averaging silent padding would
-  attenuate the voice up to 9×, below the speech gate; and an **input gain
-  guard** snapshots the hardware input volume before voice processing is
-  enabled and restores it whenever it drops (and again on exit). The
-  hardware gain is shared machine-wide, and even with the voice unit's AGC
-  disabled macOS winds it down when voice processing engages — Teams/Zoom
-  read the same turned-down device, so without the guard the user goes
-  quiet *in their own meeting*. Only drops below the snapshot are corrected,
-  so a user deliberately raising their mic volume is never fought.
+- **Mic: raw capture, no Apple voice processing.** An earlier version
+  captured the mic through the system's voice-processing unit (AEC, so an
+  open-speaker mic wouldn't hear the meeting playback). It was removed after
+  measurement: while any process has voice processing engaged on a device,
+  macOS hands every *other* client of that device — Teams, Zoom — a signal
+  attenuated by ~40 dB (a concurrent raw capture drops to ~1% amplitude and
+  recovers the moment the unit disengages; the hardware input volume never
+  moves, so guarding/restoring it does not help). In short: AEC here made
+  the user inaudible in their own meeting. The mic is therefore read raw
+  from the default input device, and the echo problem AEC solved is handled
+  in Python instead by an **EchoGate** (`audio.py`): the system tap is a
+  clean reference of exactly what the speakers played, so a mic segment
+  whose normalized cross-correlation against the time-aligned tap audio
+  peaks high (bleed measures ~0.9, unrelated speech ~0.03, threshold 0.30)
+  is speaker bleed and is dropped — its content is already being transcribed
+  from the system lane. On a headset there is no acoustic path and the gate
+  never fires; either way nothing system-wide is touched.
 - **Speaker OCR** (`scribatim-speaker`) reads the name the meeting app already
   draws on screen — attribution without a bot in the call. The Swift side is
   deliberately dumb (emit all recognized text + positions, plus a mechanical
@@ -63,9 +68,9 @@ captions. A meeting must never be lost because an optional layer broke.
   latency is bounded by `segment_silence_seconds`.
 - Capture rates are converted to Whisper's 16 kHz by a streaming
   **windowed-sinc resampler** (`audio.py:Resampler`), not by box-averaging
-  or bare interpolation: the mic helper's 24 kHz stream decimated without a
-  low-pass folds the 8–12 kHz band onto speech frequencies — inaudible in a
-  meter, measurable in word accuracy.
+  or bare interpolation: a 48 kHz stream decimated without a low-pass folds
+  the 8–12 kHz band onto speech frequencies — inaudible in a meter,
+  measurable in word accuracy.
 - Each segment is **peak-normalized** (gain capped at 12×) before decoding —
   Whisper degrades on faint audio (distant speakers on the tap, an AGC-less
   mic) — while hallucination gating below reads the *raw* RMS, so quiet
@@ -127,13 +132,19 @@ Two on-screen layouts, two mechanisms:
   roster.
 
 OCR samples land on a rolling timeline; each caption asks "which name
-dominated [segment start, segment end]?" — a windowed majority vote. This
-absorbs Whisper's multi-second decode lag and single-frame OCR flicker
-without any clock coupling between the helpers. An empty window (the glow
-faded between sentences, OCR missed frames) falls back to the most recent
-name within the last 10 s: speakers hold the floor for many seconds at a
-time, so the nearest recent name beats an anonymous "Participant" far more
-often than it mislabels a fast hand-off.
+dominated [segment start, segment end]?" — a windowed vote that absorbs
+Whisper's multi-second decode lag and single-frame OCR flicker without any
+clock coupling between the helpers. The vote is *skewed late*, because the
+glow evidence lags the audio: apps draw the outline a beat after someone
+starts talking and keep it lit a second or two after they stop. Samples in
+the first ~1.5 s of a window usually still show the previous speaker's
+fading outline — counting them mislabeled every turn change — so they're
+skipped; samples up to 2 s past the window count at half weight (they catch
+outlines drawn after a short utterance, but might already be the next
+speaker's reply). An empty vote falls back to the most recent name within
+the last 10 s: speakers hold the floor for many seconds at a time, so the
+nearest recent name beats an anonymous "Participant" far more often than it
+mislabels a fast hand-off.
 
 Audio diarization (pyannote-style) was considered and rejected for v1: it's
 a second heavy model competing for compute in real time, and it yields
