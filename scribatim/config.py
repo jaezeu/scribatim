@@ -21,7 +21,6 @@ DEFAULTS = {
     "segment_max_seconds": 12.0,
     "segment_silence_seconds": 0.8,
     "segment_min_speech_seconds": 0.4,
-    "mic_aec": True,  # echo-cancelled mic via Apple voice processing
     "speaker_ocr": False,  # experimental: name captions via meeting-window OCR
 }
 

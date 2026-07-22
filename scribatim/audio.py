@@ -2,12 +2,16 @@
 
 Both sources deliver mono float32 @ 16 kHz to a Segmenter, which uses an
 adaptive energy gate to cut speech into utterance-sized segments for Whisper.
+On open speakers the mic also hears the remote participants; EchoGate drops
+those mic segments by correlating them against the system tap.
 """
 
 import json
 import logging
 import subprocess
 import threading
+import time
+from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -17,7 +21,6 @@ log = logging.getLogger("scribatim.audio")
 TARGET_RATE = 16000
 BIN_DIR = Path(__file__).resolve().parent.parent / "bin"
 TAP_BINARY = BIN_DIR / "scribatim-tap"
-MIC_BINARY = BIN_DIR / "scribatim-mic"
 
 
 class Resampler:
@@ -74,10 +77,11 @@ class Segmenter:
     FRAME = int(TARGET_RATE * 0.03)  # 30 ms
 
     def __init__(self, source: str, on_segment, on_level,
-                 silence_s=0.8, max_s=12.0, min_speech_s=0.4):
+                 silence_s=0.8, max_s=12.0, min_speech_s=0.4, tee=None):
         self.source = source
         self.on_segment = on_segment          # (source, np.ndarray) -> None
         self.on_level = on_level              # (source, float rms) -> None
+        self.tee = tee                        # (np.ndarray) -> None, raw 16 kHz stream
         self.silence_frames = int(silence_s / 0.03)
         self.max_frames = int(max_s / 0.03)
         self.min_speech_frames = int(min_speech_s / 0.03)
@@ -92,6 +96,8 @@ class Segmenter:
         self._level_n = 0
 
     def feed(self, chunk: np.ndarray):
+        if self.tee is not None:
+            self.tee(chunk)
         buf = np.concatenate([self._residual, chunk])
         n_frames = len(buf) // self.FRAME
         self._residual = buf[n_frames * self.FRAME:]
@@ -216,37 +222,25 @@ class SystemAudioSource(HelperProcessSource):
     label = "system tap"
 
 
-class AECMicSource(HelperProcessSource):
-    """Microphone through Apple's voice-processing unit: echo cancellation
-    (system playback subtracted from the mic), noise suppression, auto gain.
-    Keeps the mic lane clean even on open speakers."""
-
-    binary = MIC_BINARY
-    label = "mic (echo-cancelled)"
-
-
 class MicSource:
-    """Microphone capture. Prefers the echo-cancelled Swift helper; falls back
-    to a raw sounddevice stream if the helper is missing or fails."""
+    """Raw microphone capture from the default input device — the built-in
+    mic, or whatever headset is selected in System Settings.
 
-    def __init__(self, segmenter: Segmenter, aec: bool = True):
+    Deliberately does NOT use Apple's voice-processing unit (AEC): macOS
+    applies that processing device-wide, so while it is engaged every other
+    client of the microphone — Teams, Zoom — receives a signal attenuated by
+    ~40 dB and the user becomes inaudible in their own meeting (measured: a
+    concurrent raw capture drops to ~1% amplitude the moment the voice unit
+    engages, and recovers when it disengages). Speaker bleed of remote
+    voices into an open mic is instead handled downstream by EchoGate,
+    which touches nothing system-wide.
+    """
+
+    def __init__(self, segmenter: Segmenter):
         self.segmenter = segmenter
-        self.aec = aec
         self.stream = None
-        self._helper: AECMicSource | None = None
 
     def start(self):
-        if self.aec and MIC_BINARY.exists():
-            try:
-                self._helper = AECMicSource(self.segmenter)
-                self._helper.start()
-                return
-            except Exception as e:
-                log.warning("echo-cancelled mic unavailable (%s) — using raw mic", e)
-                self._helper = None
-        self._start_raw()
-
-    def _start_raw(self):
         import sounddevice as sd
 
         def callback(indata, frames, time_info, status):
@@ -275,14 +269,99 @@ class MicSource:
                 samplerate=native, channels=1, dtype="float32",
                 blocksize=int(native * 0.1), callback=cb_native)
             self.stream.start()
-        log.info("microphone streaming")
+        try:
+            device = sd.query_devices(kind="input")["name"]
+        except Exception:
+            device = "default input"
+        log.info("microphone streaming (%s)", device)
 
     def stop(self):
-        if self._helper:
-            self._helper.stop()
-            self._helper = None
         if self.stream:
             self.stream.stop()
             self.stream.close()
             self.stream = None
         self.segmenter.flush()
+
+
+class EchoGate:
+    """Drops mic segments that are speaker bleed of the system output.
+
+    On open speakers the microphone hears the remote participants; those
+    utterances are already transcribed from the system tap, so decoding them
+    again from the mic lane duplicates every caption attributed to "You".
+    The tap is a clean reference of exactly what the speakers played: a mic
+    segment that is essentially a delayed, room-filtered copy of it peaks
+    high in normalized cross-correlation against the time-aligned reference
+    window; the user's own voice does not. On a headset there is no acoustic
+    path from the speakers to the mic, so the gate never fires.
+
+    Timeline: reference chunks arrive as a contiguous 16 kHz stream whose
+    latest sample is stamped with wall-clock time; a mic segment ends at the
+    moment its Segmenter closes it. Pipe buffering skews the two clocks by a
+    fraction of a second, so correlation is searched over ±PAD_S of lag.
+    """
+
+    KEEP_S = 30.0        # reference history kept
+    PAD_S = 0.5          # timestamp jitter absorbed by the lag search
+    MIN_REF_RMS = 0.004  # quieter than this = speakers effectively silent
+    THRESHOLD = 0.30     # unrelated speech correlates ~0.05; bleed ~0.4-0.9
+
+    def __init__(self):
+        self._chunks: deque = deque()
+        self._size = 0          # samples currently held
+        self._end = 0.0         # wall-clock time of the last reference sample
+        self._lock = threading.Lock()
+
+    def feed_reference(self, chunk: np.ndarray, now: float | None = None):
+        with self._lock:
+            self._chunks.append(chunk)
+            self._size += len(chunk)
+            self._end = time.time() if now is None else now
+            keep = int(self.KEEP_S * TARGET_RATE)
+            while self._size - len(self._chunks[0]) > keep:
+                self._size -= len(self._chunks.popleft())
+
+    def _reference(self, a: float, b: float) -> np.ndarray | None:
+        """Reference samples covering wall-clock [a, b], or None if absent."""
+        with self._lock:
+            if not self._chunks:
+                return None
+            buf = np.concatenate(self._chunks)
+            end = self._end
+        start = end - len(buf) / TARGET_RATE
+        i0 = max(int((a - start) * TARGET_RATE), 0)
+        i1 = min(int((b - start) * TARGET_RATE), len(buf))
+        return buf[i0:i1] if i1 > i0 else None
+
+    def is_echo(self, segment: np.ndarray, now: float | None = None) -> bool:
+        now = time.time() if now is None else now
+        t0 = now - len(segment) / TARGET_RATE
+        ref = self._reference(t0 - self.PAD_S, now + self.PAD_S)
+        # need at least some lag slack beyond the segment length to align
+        if ref is None or len(ref) < len(segment) + TARGET_RATE // 8:
+            return False
+        if float(np.sqrt(np.mean(ref ** 2))) < self.MIN_REF_RMS:
+            return False  # nothing loud was playing — can't be bleed
+        corr = self._max_ncc(ref, segment)
+        if corr >= self.THRESHOLD:
+            log.info("mic segment dropped as speaker bleed (corr %.2f)", corr)
+            return True
+        return False
+
+    @staticmethod
+    def _max_ncc(ref: np.ndarray, seg: np.ndarray) -> float:
+        """Peak normalized cross-correlation of seg against every lag of ref."""
+        seg = seg - float(np.mean(seg))
+        ref = ref - float(np.mean(ref))
+        seg_norm = float(np.sqrt(np.sum(seg.astype(np.float64) ** 2)))
+        if seg_norm < 1e-6:
+            return 0.0
+        nlag = len(ref) - len(seg)
+        nfft = 1 << int(len(ref) + len(seg)).bit_length()
+        r = np.fft.rfft(ref, nfft)
+        s = np.fft.rfft(seg, nfft)
+        corr = np.fft.irfft(r * np.conj(s), nfft)[:nlag + 1]
+        csum = np.concatenate([[0.0], np.cumsum(ref.astype(np.float64) ** 2)])
+        window_energy = csum[len(seg):len(seg) + nlag + 1] - csum[:nlag + 1]
+        ncc = np.abs(corr) / (np.sqrt(np.maximum(window_energy, 1e-12)) * seg_norm)
+        return float(np.max(ncc))

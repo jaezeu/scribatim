@@ -28,15 +28,15 @@ log = logging.getLogger("scribatim.stt")
 # spurious breaks mid-sentence.
 NO_SPACE_LANGS = {"zh", "yue", "ja", "th", "lo", "my", "km"}
 
-# Whisper's classic hallucinations on faint/garbled audio (echo residue the
-# AEC didn't fully cancel, distant murmur). Dropped only when the segment is
+# Whisper's classic hallucinations on faint/garbled audio (speaker bleed too
+# weak for the echo gate, distant murmur). Dropped only when the segment is
 # also quiet — a real, direct utterance of these is much louder.
 HALLUCINATION_PHRASES = {
     "thank you", "thanks", "thank you very much", "thanks for watching",
     "thank you for watching", "bye", "you", "subscribe",
     "please subscribe", "see you next time", "so",
 }
-HALLUCINATION_RMS = 0.02  # direct mic speech w/ AGC is typically ≥0.05
+HALLUCINATION_RMS = 0.02  # direct speech into a nearby mic is well above this
 
 
 def _top_word(text: str) -> tuple[int, float]:

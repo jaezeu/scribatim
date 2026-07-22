@@ -19,7 +19,7 @@ from pathlib import Path
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
-from .audio import MicSource, Segmenter, SystemAudioSource
+from .audio import EchoGate, MicSource, Segmenter, SystemAudioSource
 from .config import PROJECT_ROOT, load_config
 from .minutes import PROMPTS, generate, transcript_to_text
 from .speaker import SpeakerTracker
@@ -168,7 +168,13 @@ async def start():
         state.session_dir = None
         state.roster = []
 
+    # on open speakers the mic hears the remote participants too — drop mic
+    # segments that are just a delayed copy of what the system tap heard
+    gate = EchoGate()
+
     def on_segment(source, audio):
+        if source == "mic" and gate.is_echo(audio):
+            return
         state.transcriber.submit(source, audio)
 
     def on_level(source, rms):
@@ -180,9 +186,9 @@ async def start():
         min_speech_s=cfg["segment_min_speech_seconds"])
 
     errors = []
-    system = SystemAudioSource(Segmenter("system", on_segment, on_level, **seg_kwargs))
-    mic = MicSource(Segmenter("mic", on_segment, on_level, **seg_kwargs),
-                    aec=cfg["mic_aec"])
+    system = SystemAudioSource(Segmenter("system", on_segment, on_level,
+                                         tee=gate.feed_reference, **seg_kwargs))
+    mic = MicSource(Segmenter("mic", on_segment, on_level, **seg_kwargs))
     # mic first: opening it during the tap's aggregate-device creation can hang
     for name, src in (("mic", mic), ("system", system)):
         try:

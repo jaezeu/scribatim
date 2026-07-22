@@ -30,8 +30,8 @@
   <text x="481" y="112" font-size="12" fill="#8b94a7" text-anchor="middle">read-only on the output mix</text>
 
   <rect x="356" y="182" width="250" height="72" rx="12" fill="#131a2b" stroke="#22304f"/>
-  <text x="481" y="212" font-size="14" font-weight="600" fill="#7aa2ff" text-anchor="middle">Echo-cancelled capture</text>
-  <text x="481" y="234" font-size="12" fill="#8b94a7" text-anchor="middle">Apple voice processing (AEC)</text>
+  <text x="481" y="212" font-size="14" font-weight="600" fill="#7aa2ff" text-anchor="middle">Raw mic capture</text>
+  <text x="481" y="234" font-size="12" fill="#8b94a7" text-anchor="middle">speaker bleed filtered vs. the tap</text>
 
   <rect x="356" y="304" width="250" height="72" rx="12" fill="#131a2b" stroke="#22304f" stroke-dasharray="5 4"/>
   <text x="481" y="328" font-size="14" font-weight="600" fill="#7aa2ff" text-anchor="middle">Speaker-name OCR</text>
