@@ -186,4 +186,19 @@ signal(SIGPIPE) { _ in
     exit(0)
 }
 
+// SIGPIPE only fires on a *write*, and a wedged audio callback stops writing —
+// an orphaned helper then holds its aggregate device open forever, which can
+// hang every new CoreAudio client on the machine. Watch the parent directly:
+// getppid() flips to 1 (launchd) the moment it dies, whatever the cause.
+let parentWatch = DispatchSource.makeTimerSource(queue: .main)
+parentWatch.schedule(deadline: .now() + 1, repeating: 1)
+parentWatch.setEventHandler {
+    if getppid() == 1 {
+        log("parent process gone — shutting down")
+        teardown()
+        exit(0)
+    }
+}
+parentWatch.resume()
+
 RunLoop.main.run()

@@ -48,6 +48,18 @@ async def lifespan(app):
     state.transcriber.start()
     log.info("dashboard ready → http://127.0.0.1:%d/?t=%s", cfg["port"], TOKEN)
     yield
+    # Ctrl-C / SIGTERM while capturing: the sources must be stopped here, not
+    # just on /api/stop — an orphaned tap helper keeps its aggregate device
+    # alive, which can hang every new CoreAudio client on the machine.
+    with state.lock:
+        state.running = False
+        sources, state.sources = state.sources, []
+    for src in sources:
+        try:
+            await asyncio.to_thread(src.stop)
+        except Exception:
+            log.exception("source stop failed at shutdown")
+    _stop_speaker_tracker()
     state.transcriber.stop()
 
 
