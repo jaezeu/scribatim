@@ -301,7 +301,9 @@ class EchoGate:
     fraction of a second, so correlation is searched over ±PAD_S of lag.
     """
 
-    KEEP_S = 30.0        # reference history kept
+    KEEP_S = 60.0        # reference history kept — the echo check runs on the
+                         # transcriber worker, so it must still cover a segment
+                         # that sat behind a queue backlog
     PAD_S = 0.5          # timestamp jitter absorbed by the lag search
     MIN_REF_RMS = 0.004  # quieter than this = speakers effectively silent
     THRESHOLD = 0.30     # unrelated speech correlates ~0.05; bleed ~0.4-0.9

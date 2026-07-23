@@ -169,12 +169,15 @@ async def start():
         state.roster = []
 
     # on open speakers the mic hears the remote participants too — drop mic
-    # segments that are just a delayed copy of what the system tap heard
+    # segments that are just a delayed copy of what the system tap heard.
+    # The check runs on the transcriber worker (via prefilter), NOT here:
+    # on_segment is called from the PortAudio callback, and the gate's FFT
+    # on a long segment is too heavy for the real-time audio thread.
     gate = EchoGate()
+    state.transcriber.prefilter = (
+        lambda source, audio, t: source == "mic" and gate.is_echo(audio, now=t))
 
     def on_segment(source, audio):
-        if source == "mic" and gate.is_echo(audio):
-            return
         state.transcriber.submit(source, audio)
 
     def on_level(source, rms):

@@ -122,6 +122,10 @@ class Transcriber:
         """emit(event: dict) is called from the worker thread."""
         self.cfg = cfg
         self.emit = emit
+        # optional (source, audio, t_captured) -> True to drop a segment.
+        # Runs on this worker thread: checks too heavy for the capture
+        # callbacks (e.g. the echo gate's FFT) belong here.
+        self.prefilter = None
         self.q: queue.Queue = queue.Queue(maxsize=64)
         self.model = None            # CTranslate2 WhisperModel when on CPU
         self._mlx = None             # mlx_whisper module when on Metal
@@ -272,6 +276,8 @@ class Transcriber:
                 break
             source, audio, t_captured = item
             try:
+                if self.prefilter is not None and self.prefilter(source, audio, t_captured):
+                    continue
                 t0 = time.time()
                 # Optional language lock: per-utterance auto-detection is
                 # unreliable on short clips with smaller models (e.g. zh/yue/ja

@@ -49,8 +49,11 @@ broke.
   whose normalized cross-correlation against the time-aligned tap audio
   peaks high (bleed measures ~0.9, unrelated speech ~0.03, threshold 0.30)
   is speaker bleed and is dropped — its content is already being transcribed
-  from the system lane. On a headset there is no acoustic path and the gate
-  never fires; either way nothing system-wide is touched.
+  from the system lane. The check runs on the transcriber worker (via its
+  `prefilter` hook), not in the PortAudio callback that closes segments: the
+  correlation FFT on a long segment is too heavy for the real-time audio
+  thread. On a headset there is no acoustic path and the gate never fires;
+  either way nothing system-wide is touched.
 - **Speaker OCR** (`scribatim-speaker`) reads the name the meeting app already
   draws on screen — attribution without a bot in the call. The Swift side is
   deliberately dumb (emit all recognized text + positions, plus a mechanical

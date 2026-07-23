@@ -5,7 +5,8 @@ import unittest
 import numpy as np
 
 from scribatim.transcriber import (
-    HALLUCINATION_RMS, _suspect_segment, is_hallucination, normalize_segment,
+    HALLUCINATION_RMS, Transcriber, _suspect_segment, is_hallucination,
+    normalize_segment,
 )
 
 
@@ -102,6 +103,50 @@ class NormalizeSegment(unittest.TestCase):
     def test_loud_audio_untouched(self):
         x = tone(0.3)
         self.assertIs(normalize_segment(x), x)
+
+
+class Prefilter(unittest.TestCase):
+    """The prefilter hook runs on the worker thread (it hosts checks too
+    heavy for the capture callbacks, like the echo gate's FFT) and must drop
+    segments before any decoding."""
+
+    def worker(self, prefilter):
+        emitted = []
+        t = Transcriber({"language": "", "show_original": False}, emitted.append)
+        # stub the model out: any segment reaching decode "transcribes"
+        t._speech_ratio = lambda audio: 1.0
+        t._decode = lambda audio, task, language=None, strict=False: ("hi", "en", 1.0)
+        t.prefilter = prefilter
+        t.start()
+        return t, emitted
+
+    def test_dropped_segment_never_decodes_or_emits(self):
+        seen = []
+        t, emitted = self.worker(lambda s, a, tc: seen.append(s) or s == "mic")
+        t.submit("mic", LOUD)
+        self.assertTrue(t.drain(timeout=5))
+        t.stop()
+        self.assertEqual(seen, ["mic"])
+        self.assertEqual(emitted, [])
+
+    def test_passed_segment_still_emits(self):
+        t, emitted = self.worker(lambda s, a, tc: s == "mic")
+        t.submit("system", LOUD)
+        self.assertTrue(t.drain(timeout=5))
+        t.stop()
+        self.assertEqual([e["text_en"] for e in emitted], ["hi"])
+
+    def test_prefilter_error_does_not_kill_the_worker(self):
+        def boom(s, a, tc):
+            raise RuntimeError("gate blew up")
+        t, emitted = self.worker(boom)
+        t.submit("system", LOUD)
+        self.assertTrue(t.drain(timeout=5))
+        t.prefilter = None
+        t.submit("system", LOUD)
+        self.assertTrue(t.drain(timeout=5))
+        t.stop()
+        self.assertEqual([e["text_en"] for e in emitted], ["hi"])
 
 
 if __name__ == "__main__":
